@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: terendik-question-generator
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements-lock.txt
+    startCommand: uvicorn app.deployment:create_app --factory --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips '*'
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.9
+      - key: APP_ACCESS_PASSWORD
+        generateValue: true
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: LLM_MODEL
+        value: gemini-3.5-flash-lite
+      - key: APP_STORAGE_NOTICE
+        value: Бесплатная демонстрация. Сервер может засыпать; загруженные материалы и результаты могут исчезнуть при пересоздании сервиса. Сохраняйте важные материалы у себя.

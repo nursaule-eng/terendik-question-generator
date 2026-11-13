@@ -3,6 +3,7 @@ import random
 import sqlite3
 import uuid
 import hashlib
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -35,7 +36,9 @@ async def lifespan(app):
 
 
 app = FastAPI(title='Вопросы по материалу', lifespan=lifespan)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', 'testserver'])
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', 'testserver'] + [
+    h.strip() for h in (os.getenv('APP_ALLOWED_HOSTS', '') + ',' + os.getenv('RENDER_EXTERNAL_HOSTNAME', '')).split(',') if h.strip()
+])
 app.mount('/static', StaticFiles(directory=ASSETS), name='static')
 
 
