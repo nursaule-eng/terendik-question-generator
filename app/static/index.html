@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Тереңдік · вопросы по учебным материалам</title>
+<link rel="stylesheet" href="/static/redesign.css">
+</head>
+<body>
+<div class="app">
+  <aside class="shelf" aria-label="Документы">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <div>
+        <div class="brand-name">Тереңдік</div>
+        <div class="brand-sub">Вопросы по учебным материалам</div>
+      </div>
+    </div>
+
+    <label class="drop" id="drop">
+      <input type="file" id="file" accept=".pdf,.txt,application/pdf,text/plain">
+      <strong>Загрузить материал</strong>
+      <span>Перетащите PDF или TXT сюда или нажмите, чтобы выбрать. До 20 МБ.</span>
+    </label>
+
+    <div class="shelf-head">
+      <span id="shelf-title">Материалы</span>
+      <label class="switch"><input type="checkbox" id="show-trash"> Корзина</label>
+    </div>
+    <nav class="docs" id="docs"></nav>
+
+    <div class="model" id="model"></div>
+  </aside>
+
+  <main id="main">
+    <section id="welcome" class="welcome">
+      <h1>Загрузите учебник, и система подготовит вопросы пяти уровней</h1>
+      <p>Тексты делятся на фрагменты, темы определяются автоматически, а каждый вопрос опирается на цитату из материала. Преподаватель проверяет банк, студенты проходят тест.</p>
+      <div class="ladder" id="ladder"></div>
+    </section>
+
+    <div id="workspace" hidden>
+      <header class="hero">
+        <h1 id="doc-title"></h1>
+        <div class="facts" id="doc-facts"></div>
+        <nav class="steps" role="tablist" aria-label="Этапы работы">
+          <button class="step" data-view="material" role="tab"><span class="n">1</span><span>Материал<small>темы и фрагменты</small></span></button>
+          <button class="step" data-view="generate" role="tab"><span class="n">2</span><span>Генерация<small>новые вопросы</small></span></button>
+          <button class="step" data-view="bank" role="tab"><span class="n">3</span><span>Банк<small>проверка преподавателем</small></span></button>
+          <button class="step" data-view="test" role="tab"><span class="n">4</span><span>Тест<small>проверка знаний</small></span></button>
+        </nav>
+      </header>
+
+      <!-- 1. Материал -->
+      <section class="view" id="view-material">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>Темы материала</h2><p class="lead" id="topic-lead"></p></div>
+            <div class="actions" id="doc-actions"></div>
+          </div>
+          <div id="doc-errors" class="grid"></div>
+          <div class="topics" id="topics"></div>
+        </div>
+      </section>
+
+      <!-- 2. Генерация -->
+      <section class="view" id="view-generate">
+        <form class="panel" id="gen-form">
+          <div class="panel-head"><div><h2>Сложность</h2><p class="lead">Чем глубже уровень, тем больше вопрос требует от студента: от воспроизведения определения до собственного решения.</p></div></div>
+          <div class="depth" id="depth" role="radiogroup" aria-label="Уровень сложности"></div>
+          <div class="grid g4" data-layout="1">
+            <label class="field">Тема<select id="gen-topic" class="topic-select"></select></label>
+            <label class="field">Количество вопросов<input id="gen-count" type="number" min="1" max="50" value="10"></label>
+            <div class="field">Тип вопросов<div class="seg" id="gen-type"></div></div>
+            <label class="field">Язык вопросов<select id="gen-language"><option value="auto">Как в документе</option><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+          </div>
+          <div class="actions" data-layout="2">
+            <button class="btn gold big" id="gen-button" type="submit">Создать вопросы</button>
+            <span class="hint">Каждый вопрос проходит отдельную AI-проверку, поэтому генерация занимает несколько минут.</span>
+          </div>
+        </form>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Запуски генерации</h2><p class="lead">Сколько кандидатов создала модель и сколько прошло проверку.</p></div></div>
+          <div class="grid" id="jobs"></div>
+        </div>
+      </section>
+
+      <!-- 3. Банк -->
+      <section class="view" id="view-bank">
+        <div class="panel">
+          <div class="panel-head"><div><h2>Состояние банка</h2><p class="lead">Для защиты нужно не меньше 50 вопросов на всех пяти уровнях.</p></div></div>
+          <div class="stats" id="bank-stats"></div>
+          <div class="coverage" id="coverage" aria-label="Распределение вопросов по уровням"></div>
+        </div>
+        <form class="panel" id="filter-form">
+          <div class="grid g4">
+            <label class="field">Решение преподавателя<select id="f-status"><option value="">Все</option><option value="pending">Ожидают проверки</option><option value="accepted">Приняты</option><option value="rejected">Отклонены</option></select></label>
+            <label class="field">AI-проверка<select id="f-auto"><option value="">Все</option><option value="passed">Пройдена</option><option value="failed">Не пройдена</option><option value="stale">Нужна повторная</option></select></label>
+            <label class="field">Тема<select id="f-topic" class="topic-select"></select></label>
+            <label class="field">Уровень<select id="f-level"><option value="">Все уровни</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+          </div>
+          <div class="actions" data-layout="3">
+            <div class="seg" id="f-type" data-layout="4"></div>
+            <span class="push hint" id="q-count"></span>
+          </div>
+        </form>
+        <div class="qlist" id="questions"></div>
+      </section>
+
+      <!-- 4. Тест -->
+      <section class="view" id="view-test">
+        <div id="readiness"></div>
+        <form class="panel" id="test-form">
+          <div class="panel-head"><div><h2>Новая попытка</h2><p class="lead">В тест попадают только вопросы, принятые преподавателем. Тестовые ответы проверяет сервер, открытые вы оцениваете сами по эталону.</p></div></div>
+          <div class="grid g4">
+            <label class="field">Тема<select id="test-topic" class="topic-select"></select></label>
+            <label class="field">Количество<input id="test-count" type="number" min="1" max="50" value="10"></label>
+            <label class="field">Уровень<select id="test-level"><option value="">Все уровни</option><option value="1">1 · Факт</option><option value="2">2 · Понимание</option><option value="3">3 · Применение</option><option value="4">4 · Анализ</option><option value="5">5 · Синтез</option></select></label>
+            <div class="field">Тип<div class="seg" id="test-type"></div></div>
+          </div>
+          <div class="actions" data-layout="5"><button class="btn primary big" type="submit">Начать тест</button></div>
+        </form>
+        <div id="attempt"></div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Попытки</h2></div></div>
+          <div class="history" id="history"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+
+<dialog id="edit-dialog">
+  <form id="edit-form" method="dialog">
+    <h2>Редактирование вопроса</h2>
+    <label class="field">Текст вопроса<textarea id="e-text" required></textarea></label>
+    <div class="grid g3">
+      <label class="field">Тип<select id="e-type"><option value="mcq">Тестовый</option><option value="open">Открытый</option></select></label>
+      <label class="field">Уровень<select id="e-level"><option value="1">1 · Факт</option><option value="2">2 · Понимание</option><option value="3">3 · Применение</option><option value="4">4 · Анализ</option><option value="5">5 · Синтез</option></select></label>
+      <label class="field">Язык<select id="e-language"><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+    </div>
+    <div class="grid g2" id="e-mcq">
+      <label class="field">Варианты ответа <span class="hint">по одному в строке, до 4</span><textarea id="e-options"></textarea></label>
+      <label class="field">Номер правильного варианта<select id="e-correct"><option value="">—</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select></label>
+    </div>
+    <label class="field">Эталонный ответ<textarea id="e-answer" required></textarea></label>
+    <label class="field">Объяснение<textarea id="e-explanation" required></textarea></label>
+    <label class="field">Тема<input id="e-topic" required></label>
+    <label class="field">Источники <span class="hint">JSON: fragment_id и цитата</span><textarea id="e-sources" data-layout="6"></textarea></label>
+    <div class="actions">
+      <button class="btn primary" type="submit" value="save">Сохранить изменения</button>
+      <button class="btn ghost" type="button" id="e-cancel">Отмена</button>
+      <span class="push hint">После правки запустите повторную AI-проверку.</span>
+    </div>
+  </form>
+</dialog>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

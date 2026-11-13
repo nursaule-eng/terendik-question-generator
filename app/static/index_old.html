@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Вопросы по материалу</title><link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app_old.js" defer></script>
+</head>
+<body>
+<header><h1>Вопросы по материалу</h1><p>Учебный материал → вопросы → проверка преподавателем → тест</p></header>
+<main>
+  <div id="notice" role="status" aria-live="polite"></div>
+  <aside id="config"></aside>
+  <nav aria-label="Разделы">
+    <button data-tab="documents">1. Документы</button><button data-tab="generation">2. Генерация</button>
+    <button data-tab="bank">3. Банк вопросов</button><button data-tab="test">4. Тест</button>
+  </nav>
+  <section id="documents" class="panel">
+    <h2>Документы</h2><form id="upload-form"><label>PDF с текстовым слоем или TXT, до 20 МБ<input id="file" type="file" accept=".pdf,.txt" required></label><button>Загрузить</button></form>
+    <label class="inline"><input id="show-trash" type="checkbox">Показать корзину документов</label>
+    <div id="document-list"></div>
+    <article id="document-detail"><p>Загрузите или выберите документ.</p></article>
+  </section>
+  <section id="generation" class="panel" hidden>
+    <h2>Генерация вопросов</h2><p class="selected-doc">Сначала выберите документ.</p>
+    <form id="generate-form" class="parameters">
+      <label>Тема<select id="gen-topic" class="topic-select"><option value="">Весь материал</option></select></label>
+      <label>Количество (1–50)<input id="gen-count" type="number" min="1" max="50" value="5" required></label>
+      <label>Сложность<select id="gen-level" class="level-select"></select></label>
+      <label>Тип<select id="gen-type" class="type-select"></select></label>
+      <label>Язык вопросов<select id="gen-language"><option value="auto">По языку документа</option><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+      <button id="generate-button">Создать вопросы</button>
+    </form>
+    <p>Уровни: 1 — факт; 2 — понимание; 3 — применение; 4 — анализ; 5 — синтез с несколькими условиями.</p>
+    <p>Вопросы появляются со статусом «Ожидает преподавателя». AI-проверка может ошибаться. Несовпадение сложности отмечается отдельно.</p>
+    <div id="jobs" aria-live="polite"></div>
+  </section>
+  <section id="bank" class="panel" hidden>
+    <h2>Банк вопросов · режим преподавателя</h2><p class="selected-doc">Сначала выберите документ.</p>
+    <form id="filter-form" class="parameters">
+      <label>Проверка<select id="filter-status"><option value="">Все статусы</option><option value="pending">Ожидает преподавателя</option><option value="accepted">Принят</option><option value="rejected">Отклонён преподавателем</option></select></label>
+      <label>AI-проверка<select id="filter-auto"><option value="">Все результаты</option><option value="passed">Пройдена</option><option value="failed">Отклонён AI</option><option value="stale">Требует повторной проверки</option></select></label>
+      <label>Тема<select id="filter-topic" class="topic-select"><option value="">Весь материал</option></select></label>
+      <label>Уровень AI-проверки<select id="filter-level" class="level-select"></select></label>
+      <label>Тип<select id="filter-type" class="type-select"></select></label><button>Показать</button>
+    </form>
+    <div id="question-list"></div>
+  </section>
+  <section id="test" class="panel" hidden>
+    <h2>Проверка знаний</h2><p class="selected-doc">Сначала выберите документ.</p>
+    <form id="test-form" class="parameters">
+      <label>Тема<select id="test-topic" class="topic-select"><option value="">Весь материал</option></select></label>
+      <label>Количество<input id="test-count" type="number" min="1" max="50" value="5" required></label>
+      <label>Сложность<select id="test-level" class="level-select"></select></label>
+      <label>Тип<select id="test-type" class="type-select"></select></label><button>Начать тест</button>
+    </form>
+    <p>Только принятые вопросы. Тестовые ответы проверяет сервер; открытые ответы вы оцениваете сами после просмотра эталона.</p>
+    <div id="test-readiness"></div>
+    <div id="attempt"></div><h3>Сохранённые попытки</h3><div id="attempt-history"></div>
+  </section>
+</main>
+<footer>Локальный учебный прототип. Банк содержит ответы и предназначен для преподавателя. Разделения пользователей и контроля доступа нет.</footer>
+<dialog id="edit-dialog"><form id="edit-form">
+  <h2>Редактирование вопроса</h2><p>После сохранения вопрос вернётся в ожидание и потребует повторной AI-проверки.</p>
+  <label>Вопрос<textarea id="edit-text" rows="4" required></textarea></label>
+  <label>Тип<select id="edit-type"><option value="mcq">Тестовый</option><option value="open">Открытый</option></select></label>
+  <label>Варианты: каждый с новой строки, ровно четыре для теста<textarea id="edit-options" rows="4"></textarea></label>
+  <label>Номер правильного варианта (1–4, пусто для открытого)<input id="edit-correct" type="number" min="1" max="4"></label>
+  <label>Эталонный ответ<textarea id="edit-answer" rows="3" required></textarea></label>
+  <label>Объяснение<textarea id="edit-explanation" rows="3" required></textarea></label>
+  <label>Тема<input id="edit-topic" required></label>
+  <label>Желаемый уровень<select id="edit-level"></select></label>
+  <label>Язык вопроса<select id="edit-language"><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+  <details><summary>Изменить привязку к источникам (дополнительно)</summary><label>Источники JSON: fragment_id и точная quote<textarea id="edit-sources" rows="5" required></textarea></label></details>
+  <div class="actions"><button>Сохранить и сбросить проверку</button><button id="cancel-edit" type="button">Отмена</button></div>
+</form></dialog>
+</body></html>

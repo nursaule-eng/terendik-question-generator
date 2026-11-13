@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+!.env.gemini.example
+.venv/
+__pycache__/
+.pytest_cache/
+data/
+work/
+outputs/
+*.log
+*.sqlite3*
