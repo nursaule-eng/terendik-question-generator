@@ -2,6 +2,7 @@
 /* Student page: one test by link. No access to the question bank or answers before finishing. */
 const T = {
   kk: {
+    adaptive:'Бейімделгіш тест: дұрыс жауаптан кейін келесі сұрақ қиынырақ, қатеден кейін жеңілірек болады.', right:'Дұрыс! Келесі сұрақ қиынырақ.', wrongNext:'Қате. Келесі сұрақ жеңілірек.', next:'Келесі сұрақ', showResult:'Нәтижені көру', level:'Деңгей', estimate:'Білім деңгейі', estNote:'Бағалау соңғы 4 жауап бойынша есептеледі.', correctOf:(c,t)=>`Дұрыс: ${c} / ${t}`, lvlNames:['','Факт','Түсіну','Қолдану','Талдау','Синтез'],
     loading:'Жүктелуде…', notFound:'Тест табылмады. Сілтемені оқытушыдан тексеріңіз.', closed:'Оқытушы бұл тестке жауап қабылдауды жапты.',
     questions:n=>`${n} сұрақ`, openNote:n=>`оның ішінде ${n} ашық сұрақ — оларды жасанды интеллект тексереді`,
     name:'Аты-жөніңіз', namePh:'Мысалы: Айгерім Сапарова', start:'Тестті бастау', nameShort:'Аты-жөніңізді толық жазыңыз (кемінде 2 таңба).',
@@ -15,6 +16,7 @@ const T = {
     again:'Қайта өту', hidden:'Оқытушы дұрыс жауаптарды көрсетпеуді таңдады.', error:'Қате орын алды. Қайталап көріңіз.', open:'Ашық сұрақ', test:'Тест сұрағы'
   },
   ru: {
+    adaptive:'Адаптивный тест: после верного ответа следующий вопрос сложнее, после ошибки — проще.', right:'Верно! Следующий вопрос сложнее.', wrongNext:'Неверно. Следующий вопрос проще.', next:'Следующий вопрос', showResult:'Показать результат', level:'Уровень', estimate:'Уровень знаний', estNote:'Оценка считается по последним 4 ответам.', correctOf:(c,t)=>`Верно: ${c} из ${t}`, lvlNames:['','Факт','Понимание','Применение','Анализ','Синтез'],
     loading:'Загрузка…', notFound:'Тест не найден. Проверьте ссылку у преподавателя.', closed:'Преподаватель закрыл приём ответов по этому тесту.',
     questions:n=>`${n} ${plural(n,'вопрос','вопроса','вопросов')}`, openNote:n=>`из них ${n} открытых — их проверит ИИ`,
     name:'Имя и фамилия', namePh:'Например: Айгерим Сапарова', start:'Начать тест', nameShort:'Укажите имя и фамилию (минимум 2 символа).',
@@ -28,6 +30,7 @@ const T = {
     again:'Пройти ещё раз', hidden:'Преподаватель решил не показывать правильные ответы.', error:'Произошла ошибка. Попробуйте ещё раз.', open:'Открытый вопрос', test:'Тестовый вопрос'
   },
   en: {
+    adaptive:'Adaptive test: after a correct answer the next question is harder, after a mistake it is easier.', right:'Correct! The next question is harder.', wrongNext:'Incorrect. The next question is easier.', next:'Next question', showResult:'See result', level:'Level', estimate:'Knowledge level', estNote:'Estimated from your last 4 answers.', correctOf:(c,t)=>`Correct: ${c} of ${t}`, lvlNames:['','Recall','Understand','Apply','Analyse','Create'],
     loading:'Loading…', notFound:'Test not found. Please check the link with your teacher.', closed:'The teacher has closed this test.',
     questions:n=>`${n} question${n===1?'':'s'}`, openNote:n=>`${n} open-ended — graded by AI`,
     name:'Full name', namePh:'e.g. Aigerim Saparova', start:'Start the test', nameShort:'Please enter your full name (at least 2 characters).',
@@ -85,9 +88,50 @@ function render(){
   langSwitch();
   if (!S.info) return;
   if (!S.attempt) return renderStart();
+  if (S.attempt.mode === 'adaptive' && S.attempt.status === 'active') return renderAdaptive();
   if (S.attempt.status === 'active') return renderTest();
   return renderResult();
 }
+
+function stair(path, current){
+  return h('div',{class:'stair'}, ...path.map(p=>h('div',{class:'st '+(p.correct?'ok':'no'),style:`height:${p.level*14}px`})),
+    current ? h('div',{class:'st cur',style:`height:${current*14}px`}) : null);
+}
+function renderAdaptive(){
+  const a = S.attempt, cur = a.current, letters = 'ABCD';
+  if (!cur) { reload(); return; }
+  S.path = S.path || [];
+  const q = cur.question;
+  const card = h('article',{class:'q'},
+    h('div',{class:'chips'}, h('span',{class:'qnum',text:t('q')(cur.index,cur.length)}), h('span',{class:'chip sky',text:`${t('level')} ${cur.level} · ${t('lvlNames')[cur.level]}`})),
+    stair(S.path, cur.level), h('h3',{text:q.text}));
+  const choice = h('div',{class:'choice',role:'radiogroup'});
+  const fbox = h('div');
+  let locked = false;
+  q.options.forEach((o,j)=>{
+    const input = h('input',{type:'radio',name:'adq',value:String(j)});
+    const label = h('label',null,input,h('span',{class:'k',text:letters[j]}),h('span',{text:o}));
+    input.addEventListener('change', async ()=>{
+      if (locked) return; locked = true; choice.querySelectorAll('input').forEach(i=>i.disabled=true);
+      try{
+        const r = await api(`/api/s/${encodeURIComponent(token)}/attempts/${a.id}/answer`,{method:'POST',body:{question_id:q.id,answer:j}});
+        const fb = r.feedback;
+        if (fb.correct_index!=null) choice.children[fb.correct_index].style.cssText='border-color:var(--ok);background:var(--ok-soft)';
+        if (!fb.correct) label.style.cssText='border-color:var(--danger);background:var(--danger-soft)';
+        S.path.push({level:fb.level, correct:fb.correct});
+        fbox.replaceChildren(h('div',{class:'feedback '+(fb.correct?'ok':'no')}, h('b',{text: fb.correct ? t('right') : t('wrongNext')}), fb.explanation ? h('p',{text:fb.explanation}) : null),
+          h('div',{class:'actions',style:'margin-top:12px'}, h('button',{class:'btn gold big',type:'button',onclick:async()=>{
+            if (r.finished){ S.attempt = await api(`/api/s/${encodeURIComponent(token)}/attempts/${a.id}`); S.path=null; render(); }
+            else { S.attempt = {...a, current:r.next}; render(); }
+            scrollTo({top:0}); }}, r.finished ? t('showResult') : t('next'))));
+      } catch(err){ toast(err.message,true); locked=false; choice.querySelectorAll('input').forEach(i=>i.disabled=false); }
+    });
+    choice.append(label);
+  });
+  card.append(choice, fbox);
+  $('app').replaceChildren(h('div',{class:'panel'}, h('h1',{text:S.info.title}), h('p',{class:'lead',text:t('adaptive')})), card);
+}
+async function reload(){ try{ S.attempt = await api(`/api/s/${encodeURIComponent(token)}/attempts/${S.attempt.id}`); render(); }catch(e){ toast(e.message,true);} }
 
 function renderStart(){
   const info = S.info;
@@ -96,6 +140,7 @@ function renderStart(){
   const form = h('form',{class:'panel grid'},
     h('h1',{text:info.title}),
     h('p',{class:'lead'}, t('questions')(info.question_count) + (info.open_questions ? ' · ' + t('openNote')(info.open_questions) : '')),
+    info.adaptive ? h('p',{class:'note ok',text:t('adaptive')}) : null,
     info.is_open ? h('label',{class:'field'}, t('name'), input) : h('p',{class:'note bad',text:t('closed')}),
     info.is_open ? h('div',{class:'actions'}, h('button',{class:'btn gold big',type:'submit'}, t('start'))) : null);
   form.addEventListener('submit', async e => {
@@ -152,7 +197,13 @@ function renderResult(){
   const grading = ['pending','running'].includes(a.grading_status);
   const pct = a.percent ?? (a.total ? Math.round(100*a.correct/a.total) : null);
   const box = h('div',{class:'qlist'});
-  box.append(h('div',{class:'panel result'},
+  if (a.adaptive){
+    const r = a.adaptive;
+    box.append(h('div',{class:'panel result'},
+      h('div',{class:'grid center'}, h('span',{class:'hint',text:t('estimate')}), h('div',{class:'estimate',text:r.estimate!=null?'≈ '+r.estimate:'—'}),
+        r.estimate_level ? h('span',{class:'chip sky',text:`${r.estimate_level} · ${t('lvlNames')[r.estimate_level]}`}) : null),
+      h('div',{class:'grid'}, h('h2',{text:t('correctOf')(r.correct,r.total)}), h('p',{class:'hint',text:t('estNote')}), stair(r.path))));
+  } else box.append(h('div',{class:'panel result'},
     h('div',{class:'ring',style:'--p:'+(pct??0)}, h('div',null, h('div',null, h('b',{text: pct==null ? '…' : pct+'%'})))),
     h('div',{class:'grid'}, h('h2',{text: pct==null ? S.info.title : t('resultTitle')(pct)}),
       a.total ? h('p',{class:'lead',text:t('mcqScore')(a.correct,a.total)}) : null,

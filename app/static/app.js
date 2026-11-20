@@ -410,14 +410,76 @@ async function loadAttempts(){
     h('p',{text: ok ? `К тесту допущено ${st.accepted_for_test} из ${st.total} вопросов.` : `В банке ${st.total} ${plural(st.total,'вопрос','вопроса','вопросов')}, но преподаватель ещё ни одного не принял.`}),
     ok ? null : h('button',{class:'btn',type:'button',onclick:()=>show('bank')},'Открыть банк')));
   $('history').replaceChildren(...(list.length ? list.map(a => h('button',{class:'hist',type:'button',onclick:async()=>{ try{ renderAttempt(await api('/api/attempts/'+a.id)); }catch(e){toast(e.message,true);} }},
-      h('b',{text: a.status==='active' ? 'Продолжить попытку' : 'Результат'}),
-      h('span',{text: fmtDate(a.created_at) + (a.status==='finished' ? (a.percent!=null ? ` · ${a.percent}%` : a.total ? ` · ${a.correct} из ${a.total}` : '') : '')}))) : [h('p',{class:'empty',text:'Попыток пока нет.'})]));
+      h('b',{text: (a.mode==='adaptive' ? 'Адаптивный · ' : '') + (a.status==='active' ? 'продолжить попытку' : 'результат')}),
+      h('span',{text: fmtDate(a.created_at) + (a.status==='finished' ? (a.estimate!=null ? ` · уровень ≈ ${a.estimate}` : a.percent!=null ? ` · ${a.percent}%` : a.total ? ` · ${a.correct} из ${a.total}` : '') : '')}))) : [h('p',{class:'empty',text:'Попыток пока нет.'})]));
 }
 $('test-form').addEventListener('submit', e => { e.preventDefault(); busy(e.submitter, async ()=>{
   if (S.attempt && S.attempt.status==='active' && !await confirmAction('Начать новую попытку? Текущую можно продолжить из списка попыток.')) return;
   const a = await api('/api/attempts',{method:'POST',body:params('test')});
   renderAttempt(a); toast(`Тест начат: ${a.available ?? a.questions.length} ${plural(a.available ?? a.questions.length,'вопрос','вопроса','вопросов')}.`); await loadAttempts();
 });});
+/* ---------- adaptive test ---------- */
+$('adaptive-form').addEventListener('submit', e => { e.preventDefault(); busy(e.submitter, async ()=>{
+  if (!S.doc) throw Error('Сначала выберите материал слева.');
+  const body = {document_id:S.doc, topic_id: $('ad-topic').value ? Number($('ad-topic').value) : null,
+    length:Number($('ad-length').value)||10, start_level:Number($('ad-start').value)||2};
+  const a = await api('/api/adaptive',{method:'POST',body});
+  renderAdaptive(a, a.current, []); await loadAttempts();
+});});
+function stairChart(path, current){
+  return h('div',{class:'stair',title:'Путь по уровням: высота столбика — уровень вопроса'},
+    ...path.map(p => h('div',{class:'st '+(p.correct?'ok':'no'),style:`height:${p.level*16}px`,title:`Уровень ${p.level}: ${p.correct?'верно':'ошибка'}`})),
+    current ? h('div',{class:'st cur',style:`height:${current*16}px`,title:'Текущий вопрос'}) : null);
+}
+function adaptiveSummary(r){
+  return h('div',{class:'panel result'},
+    h('div',{class:'grid center'}, h('span',{class:'hint',text:'Уровень знаний'}), h('div',{class:'estimate',text: r.estimate!=null ? '≈ '+r.estimate : '—'}),
+      r.estimate_name ? h('span',{class:'chip sky',text: r.estimate_level+' · '+r.estimate_name}) : null),
+    h('div',{class:'grid'}, h('h2',{text:`Верно ${r.correct} из ${r.total}`}),
+      h('p',{class:'lead',text:'Оценка по последним 4 ответам: верный ответ на уровне N означает «справляется с N», ошибка — «не выше N−1». Адаптивный тест колеблется вокруг уровня, который студент уверенно решает.'}),
+      stairChart(r.path),
+      h('div',{class:'chips'}, ...r.per_level.map(l => h('span',{class:'chip',text:`Ур. ${l.level}: ${l.correct}/${l.answered}`})))));
+}
+function renderAdaptive(a, current, path){
+  const box = $('attempt'); S.attempt = a;
+  const letters = 'ABCD';
+  const q = current.question;
+  const panel = h('div',{class:'panel adq'},
+    h('div',{class:'chips'}, h('span',{class:'qnum',text:`Вопрос ${current.index} из ${current.length}`}), h('span',{class:'chip sky lvl-badge',text:`Уровень ${current.level} · ${(levelOf(current.level)||{}).name||''}`}), q.topic ? h('span',{class:'chip',text:q.topic}) : null),
+    stairChart(path, current.level),
+    h('h3',{text:q.text}));
+  const choice = h('div',{class:'choice',role:'radiogroup'});
+  const feedbackBox = h('div');
+  let answered = false;
+  q.options.forEach((o,j) => {
+    const input = h('input',{type:'radio',name:'adq',value:String(j)});
+    const label = h('label',null, input, h('span',{class:'k',text:letters[j]}), h('span',{text:o}));
+    input.addEventListener('change', async () => {
+      if (answered) return; answered = true;
+      choice.querySelectorAll('label').forEach(l=>l.classList.add('locked')); choice.querySelectorAll('input').forEach(i=>i.disabled=true);
+      try{
+        const r = await api(`/api/adaptive/${a.id}/answer`,{method:'POST',body:{question_id:q.id, answer:j}});
+        const fb = r.feedback;
+        if (fb.correct_index!=null) choice.children[fb.correct_index].style.cssText = 'border-color:var(--ok);background:var(--ok-soft)';
+        if (!fb.correct) label.style.cssText = 'border-color:var(--danger);background:var(--danger-soft)';
+        const newPath = [...path, {level:fb.level, correct:fb.correct}];
+        feedbackBox.replaceChildren(h('div',{class:'feedback '+(fb.correct?'ok':'no')},
+          h('b',{text: fb.correct ? `Верно — следующий вопрос сложнее (уровень ${fb.next_level}).` : `Неверно — следующий вопрос проще (уровень ${fb.next_level}).`}),
+          fb.explanation ? h('p',{text:fb.explanation}) : null),
+          h('div',{class:'actions',style:'margin-top:12px'}, btn(r.finished ? 'Показать результат' : 'Следующий вопрос','primary', async()=>{
+            if (r.finished){ const full = await api('/api/attempts/'+a.id); renderAttempt(full); loadAttempts().catch(()=>{}); }
+            else renderAdaptive(a, r.next, newPath);
+          })));
+      } catch(err){ toast(err.message,true); answered=false; choice.querySelectorAll('input').forEach(i=>i.disabled=false); }
+    });
+    choice.append(label);
+  });
+  panel.append(choice, feedbackBox,
+    h('div',{class:'actions'}, h('button',{class:'btn ghost',type:'button',onclick:()=>{ box.replaceChildren(); S.attempt=null; }}, 'Закрыть')));
+  box.replaceChildren(panel);
+  box.scrollIntoView({behavior:'smooth',block:'start'});
+}
+
 function gradeBox(g){
   if (!g) return null;
   return h('div',{class:'grade'}, h('b',{text:'Оценка ИИ: '+g.score+'/10'}),
@@ -426,6 +488,9 @@ function gradeBox(g){
     g.advice ? h('div',null, h('b',{text:'Что повторить: '}), g.advice) : null);
 }
 function renderAttempt(a, target){
+  if (a.mode==='adaptive' && a.status==='active' && !target){
+    if (a.current){ renderAdaptive(a, a.current, []); return; }
+  }
   if (!target) S.attempt = a;
   clearTimeout(S.gradingTimer);
   if (['pending','running'].includes(a.grading_status)) S.gradingTimer = setTimeout(async ()=>{
@@ -435,7 +500,8 @@ function renderAttempt(a, target){
   const box = target || $('attempt');
   const letters = 'ABCD';
   const form = h('form',{class:'qlist'});
-  if (done){
+  if (done && a.adaptive) form.append(adaptiveSummary(a.adaptive));
+  if (done && !a.adaptive){
     const grading = ['pending','running'].includes(a.grading_status);
     const pct = a.percent ?? (a.total ? Math.round(100*a.correct/a.total) : null);
     form.append(h('div',{class:'panel result'},
@@ -492,6 +558,7 @@ function renderAttempt(a, target){
 }
 
 /* ---------- students: tests by link, results, statistics ---------- */
+$('as-mode').addEventListener('change', () => { $('as-adlen-field').hidden = $('as-mode').value!=='adaptive'; });
 async function loadStudents(){
   if (!S.doc) return;
   const id = S.doc;
@@ -508,7 +575,7 @@ function renderAssignments(list){
   box.replaceChildren(...list.map(a => {
     const link = h('input',{readonly:true,value:studentLink(a),onfocus:e=>e.target.select()});
     const st = a.settings || {};
-    const descr = [a.question_count+' '+plural(a.question_count,'вопрос','вопроса','вопросов'), st.level ? 'уровень '+st.level : 'все уровни',
+    const descr = [st.adaptive ? 'адаптивный' : null, a.question_count+' '+plural(a.question_count,'вопрос','вопроса','вопросов'), st.adaptive ? null : (st.level ? 'уровень '+st.level : 'все уровни'),
       st.show_answers ? 'ответы показываются' : 'только баллы', LANG[st.ui_language]||''].filter(Boolean).join(' · ');
     const finished = a.results.filter(r=>r.status==='finished');
     const avg = finished.filter(r=>r.percent!=null);
@@ -518,7 +585,7 @@ function renderAssignments(list){
         h('td',null,r.student_name||'—'),
         h('td',null, r.status==='finished' ? (['pending','running'].includes(r.grading_status) ? 'проверяется ИИ' : 'завершён') : 'проходит'),
         h('td',null, r.total ? `${r.correct} из ${r.total}` : '—'),
-        h('td',null, r.percent!=null ? h('b',{text:r.percent+'%'}) : '—'),
+        h('td',null, r.estimate!=null ? h('b',{text:'уровень ≈ '+r.estimate}) : r.percent!=null ? h('b',{text:r.percent+'%'}) : '—'),
         h('td',null, fmtDate(r.finished_at || r.created_at)))))) : h('p',{class:'hint',text:'Пока никто не прошёл. Отправьте ссылку студентам.'});
     return h('div',{class:'panel grid'},
       h('div',{class:'panel-head'}, h('div',null, h('h2',{text:a.title}), h('p',{class:'lead',text:descr})),
@@ -557,7 +624,8 @@ $('assign-form').addEventListener('submit', e => { e.preventDefault(); busy(e.su
   if (!S.doc) throw Error('Сначала выберите материал слева.');
   const body = { document_id:S.doc, title:$('as-title').value.trim(), topic_id: $('as-topic').value ? Number($('as-topic').value) : null,
     count:Number($('as-count').value), level: $('as-level').value ? Number($('as-level').value) : null, type: segVal('as-type') || 'mixed',
-    language:'auto', show_answers: $('as-show').value==='1', ui_language:$('as-ui').value };
+    language:'auto', show_answers: $('as-show').value==='1', ui_language:$('as-ui').value,
+    adaptive: $('as-mode').value==='adaptive', adaptive_length: Number($('as-adlen').value)||10 };
   if (body.title.length < 2) throw Error('Укажите название теста.');
   const a = await api('/api/assignments',{method:'POST',body});
   toast(a.message || 'Ссылка создана. Скопируйте её и отправьте студентам.');

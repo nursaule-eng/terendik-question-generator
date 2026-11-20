@@ -335,3 +335,18 @@ table.results tr.clickable:hover td{background:var(--soft)}
 .grid>*{min-width:0}
 .seg{flex-wrap:wrap;max-width:100%}
 .seg label{flex:1 1 auto;min-width:0}
+
+/* ---------- adaptive ---------- */
+.stair{display:flex;align-items:flex-end;gap:6px;height:84px;padding:6px 0}
+.stair .st{flex:1;max-width:34px;border-radius:5px 5px 2px 2px;position:relative}
+.stair .st.ok{background:var(--sky)}
+.stair .st.no{background:#E9B6AD}
+.stair .st.cur{background:repeating-linear-gradient(45deg,var(--sky-soft),var(--sky-soft) 4px,#fff 4px,#fff 8px);border:1px dashed var(--sky)}
+.adq{display:grid;gap:12px}
+.adq .lvl-badge{justify-self:start}
+.feedback{border-radius:var(--r-md);padding:12px 14px;font-size:14px;display:grid;gap:4px}
+.feedback.ok{background:var(--ok-soft);color:var(--ok);border:1px solid #C8E7D6}
+.feedback.no{background:var(--danger-soft);color:var(--danger);border:1px solid #F1CBC4}
+.feedback p{color:var(--ink-2)}
+.choice label.locked{cursor:default}
+.estimate{font-size:40px;font-weight:700;letter-spacing:-.03em;line-height:1}

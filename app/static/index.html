@@ -130,6 +130,15 @@
           </div>
           <div class="actions" data-layout="5"><button class="btn primary big" type="submit">Начать тест</button></div>
         </form>
+        <form class="panel" id="adaptive-form">
+          <div class="panel-head"><div><h2>Адаптивный тест</h2><p class="lead">Сложность меняется по ходу теста: верный ответ — следующий вопрос на уровень выше, ошибка — на уровень ниже. В конце система оценивает примерный уровень знаний. Используются принятые тестовые вопросы.</p></div></div>
+          <div class="grid g3">
+            <label class="field">Тема<select id="ad-topic" class="topic-select"></select></label>
+            <label class="field">Сколько вопросов<input id="ad-length" type="number" min="3" max="30" value="10"></label>
+            <label class="field">Начальный уровень<select id="ad-start"><option value="1">1 · Факт</option><option value="2" selected>2 · Понимание</option><option value="3">3 · Применение</option></select></label>
+          </div>
+          <div class="actions" data-layout="5"><button class="btn primary big" type="submit">Начать адаптивный тест</button></div>
+        </form>
         <div id="attempt"></div>
         <div class="panel">
           <div class="panel-head"><div><h2>Мои пробные попытки</h2><p class="lead">Попытки студентов собраны во вкладке «Студенты».</p></div></div>
@@ -151,6 +160,10 @@
             <div class="field">Тип<div class="seg" id="as-type"></div></div>
             <label class="field">Язык интерфейса студента<select id="as-ui"><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
             <label class="field">После завершения<select id="as-show"><option value="1">Показать правильные ответы</option><option value="0">Показать только баллы</option></select></label>
+          </div>
+          <div class="grid g3">
+            <label class="field">Режим<select id="as-mode"><option value="fixed">Обычный: одинаковые вопросы для всех</option><option value="adaptive">Адаптивный: сложность подстраивается под студента</option></select></label>
+            <label class="field" id="as-adlen-field" hidden>Вопросов в адаптивном тесте<input id="as-adlen" type="number" min="3" max="30" value="10"></label>
           </div>
           <div class="actions"><button class="btn gold big" type="submit">Создать ссылку</button><span class="hint">Открытые ответы оценивает ИИ (0–10) с комментарием; итог видят студент и преподаватель.</span></div>
         </form>
