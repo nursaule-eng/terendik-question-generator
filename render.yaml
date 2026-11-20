@@ -13,6 +13,10 @@ services:
         generateValue: true
       - key: LLM_API_KEY
         sync: false
+      # Постоянная база: строка подключения PostgreSQL (например, бесплатный Neon).
+      # Без неё данные лежат на временном диске и пропадают при пересоздании сервиса.
+      - key: DATABASE_URL
+        sync: false
       - key: LLM_BASE_URL
         value: https://generativelanguage.googleapis.com/v1beta/openai
       - key: LLM_MODEL
