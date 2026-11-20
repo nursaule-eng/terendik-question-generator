@@ -64,3 +64,12 @@ def test_edit_resets_acceptance_and_blocks_test(client, saved, candidate, doc):
 def test_rejected_question_never_enters_attempt(client, saved, doc):
     assert client.post('/api/questions/' + saved + '/review', json={'status': 'rejected', 'revision': 1}).status_code == 200
     assert client.post('/api/attempts', json={'document_id': doc}).status_code == 409
+
+
+def test_quote_tolerates_pdf_hyphenation_punctuation_and_typos():
+    from app.services.validation import find_quote
+    text = "Деректерді визуализа-\nциялау — ақпаратты «графиктер» мен диаграммалар арқылы көрсету тәсілі. Ол шешім қабылдауды жеделдетеді."
+    assert find_quote('Деректерді визуализациялау - ақпаратты "графиктер" мен диаграммалар', text).startswith('Деректерді визуализациялау —')
+    assert find_quote('ақпаратты графиктер мен диаграммалар арқылы көрсету тәсілдері', text) == 'ақпаратты «графиктер» мен диаграммалар арқылы көрсету тәсілі'
+    assert find_quote('Несуществующая цитата из учебника про растения', text) is None
+    assert find_quote('шешім қабылдауды тездетеді', text) is None

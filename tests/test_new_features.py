@@ -290,3 +290,76 @@ def test_wrong_calculation_rejects_mcq(candidate, doc):
         fragments = [dict(r) for r in db.execute('SELECT * FROM fragments WHERE document_id=?', (doc,))]
     payload, status = evaluate(Reviewer(), Candidate.model_validate(task), fragments, doc, 3, target_language='ru')
     assert status == 'failed' and payload['validation']['calc_check']['status'] == 'mismatch'
+
+
+# ------------------------------------------------------------------ adaptive testing
+def bank_with_levels(doc, candidate, levels=(1, 2, 3, 4, 5), per_level=2):
+    n = 0
+    with connect() as db:
+        for level in levels:
+            for k in range(per_level):
+                n += 1
+                payload = {**candidate, 'text': f'Условный вопрос номер {n} про алгоритм и команды исполнителя {n * 13}?',
+                           'requested_level': level, 'checked_level': level, 'difficulty_reason': 'тест', 'language': 'ru',
+                           'validation': {'passed': True, 'reasons': []}}
+                db.execute("INSERT INTO questions(id,document_id,payload,auto_status,review_status) VALUES(?,?,?,'passed','accepted')",
+                           (f'ad{n}', doc, dumps(payload)))
+
+
+def correct_choice(client_question, candidate):
+    return client_question['options'].index(candidate['options'][candidate['correct_index']])
+
+
+def test_adaptive_staircase_and_estimate(client, doc, candidate):
+    bank_with_levels(doc, candidate)
+    started = client.post('/api/adaptive', json={'document_id': doc, 'length': 6, 'start_level': 2})
+    assert started.status_code == 201
+    a = started.json()
+    assert a['mode'] == 'adaptive' and a['current']['level'] == 2
+    assert 'correct_index' not in json.dumps(a)
+    q = a['current']['question']
+    levels = []
+    for step in range(6):
+        levels.append(a['current']['level'] if step == 0 else nxt['level'])
+        right = step < 3  # three correct, then wrong
+        choice = correct_choice(q, candidate) if right else (correct_choice(q, candidate) + 1) % 4
+        r = client.post(f'/api/adaptive/{a["id"]}/answer', json={'question_id': q['id'], 'answer': choice}).json()
+        assert r['feedback']['correct'] is right
+        if r['finished']:
+            break
+        nxt = r['next']
+        q = nxt['question']
+    assert levels[:4] == [2, 3, 4, 5]          # up after each correct answer
+    assert levels[4] == 4                       # down after a wrong one
+    assert r['finished'] and r['result']['total'] == 6
+    assert 3.0 <= r['result']['estimate'] <= 4.5
+    done = client.get('/api/attempts/' + a['id']).json()
+    assert done['status'] == 'finished' and done['adaptive']['estimate'] == r['result']['estimate']
+    # answering twice is rejected
+    assert client.post(f'/api/adaptive/{a["id"]}/answer', json={'question_id': q['id'], 'answer': 0}).status_code == 409
+
+
+def test_adaptive_needs_mcq_pool(client, doc, candidate):
+    assert client.post('/api/adaptive', json={'document_id': doc}).status_code == 409
+
+
+def test_student_adaptive_link(client, doc, candidate):
+    bank_with_levels(doc, candidate, levels=(1, 2, 3), per_level=3)
+    a = client.post('/api/assignments', json={'document_id': doc, 'title': 'Адаптив', 'adaptive': True,
+                                              'adaptive_length': 4, 'show_answers': False}).json()
+    info = client.get('/api/s/' + a['token']).json()
+    assert info['adaptive'] and info['question_count'] == 4
+    s = client.post(f'/api/s/{a["token"]}/start', json={'name': 'Студент А'}).json()
+    key = s['access_key']
+    assert s['current']['level'] == 2
+    q = s['current']['question']
+    for _ in range(4):
+        r = client.post(f'/api/s/{a["token"]}/attempts/{s["id"]}/answer', json={'question_id': q['id'], 'answer': correct_choice(q, candidate)},
+                        headers={'X-Attempt-Key': key}).json()
+        assert 'correct_index' not in r['feedback']
+        if r['finished']:
+            break
+        q = r['next']['question']
+    assert r['finished'] and r['result']['correct'] == 4
+    listed = client.get('/api/assignments', params={'document_id': doc}).json()[0]
+    assert listed['results'][0]['estimate'] >= 2.5
