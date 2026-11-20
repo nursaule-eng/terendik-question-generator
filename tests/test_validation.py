@@ -73,3 +73,20 @@ def test_quote_tolerates_pdf_hyphenation_punctuation_and_typos():
     assert find_quote('ақпаратты графиктер мен диаграммалар арқылы көрсету тәсілдері', text) == 'ақпаратты «графиктер» мен диаграммалар арқылы көрсету тәсілі'
     assert find_quote('Несуществующая цитата из учебника про растения', text) is None
     assert find_quote('шешім қабылдауды тездетеді', text) is None
+
+
+def test_pdf_columns_are_not_interleaved(tmp_path):
+    import pymupdf
+    from app.services.documents import extract
+    doc = pymupdf.open()
+    page = doc.new_page()
+    left = ['left column line one', 'left column line two']
+    right = ['right column line one', 'right column line two']
+    for i, (a, b) in enumerate(zip(left, right)):
+        page.insert_text((50, 100 + 20 * i), a, fontname='helv')
+        page.insert_text((330, 100 + 20 * i), b, fontname='helv')
+    path = tmp_path / 'cols.pdf'
+    doc.save(path)
+    text = ' '.join(extract(path, 'pdf')[0][1].split())
+    assert 'left column line one left column line two' in text
+    assert 'right column line one right column line two' in text
