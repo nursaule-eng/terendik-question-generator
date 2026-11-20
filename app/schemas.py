@@ -63,9 +63,17 @@ class Verdict(Strict):
 
 class IndependentAnswer(Strict):
     has_single_answer: bool
-    correct_index: int | None = Field(ge=0, le=3)
-    answer: str = Field(min_length=2, max_length=4000)
+    correct_index: int | None = Field(default=None, ge=0, le=3)
+    answer: str = Field(min_length=1, max_length=4000)
     reasoning: str = Field(min_length=2, max_length=5000)
+    calculation: str | None = Field(default=None, max_length=400)
+
+
+class Grade(Strict):
+    score: int = Field(ge=0, le=10)
+    strengths: str = Field(default='', max_length=2000)
+    missed: str = Field(default='', max_length=2000)
+    advice: str = Field(default='', max_length=2000)
 
 
 class Generate(Strict):
@@ -90,6 +98,26 @@ class Review(Strict):
 
 class TestRequest(Generate):
     pass
+
+
+class AssignmentRequest(Strict):
+    document_id: str
+    title: str = Field(min_length=2, max_length=200)
+    topic_id: int | None = None
+    count: int = Field(default=10, ge=1, le=100)
+    level: int | None = Field(default=None, ge=1, le=5)
+    type: Literal['mcq', 'open', 'mixed'] = 'mixed'
+    language: Literal['auto', 'kk', 'ru', 'en'] = 'auto'
+    show_answers: bool = True
+    ui_language: Literal['kk', 'ru', 'en'] = 'ru'
+
+
+class AssignmentUpdate(Strict):
+    is_open: bool
+
+
+class StudentStart(Strict):
+    name: str = Field(min_length=2, max_length=120)
 
 
 class Submit(Strict):
