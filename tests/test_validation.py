@@ -41,7 +41,7 @@ def test_semantic_check_separate_from_quote_and_level(candidate, doc):
     result, status = evaluate(StubReviewer(), Candidate.model_validate(candidate), fragments, doc, 5)
     assert status == 'failed'
     assert result['checked_level'] == 2 and result['level_mismatch']
-    assert result['sources'][0]['location'] == 'Фрагмент TXT №1'
+    assert result['sources'][0]['location'] == 'Фрагмент текста №1'
 
 
 def test_duplicates():
