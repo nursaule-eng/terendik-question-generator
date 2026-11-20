@@ -7,6 +7,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from app.schemas import Verdict, IndependentAnswer
 from app.services.documents import location
 from app.services.llm import RUBRIC
+from app.services import calc
 from app.services.language import LANGUAGES, obvious_language_mismatch
 
 
@@ -134,20 +135,37 @@ def evaluate(llm, candidate, fragments, document_id, requested_level, target_top
     passed = all((verdict.relevant, verdict.supported, verdict.clear, verdict.single_correct, language_ok, not verdict.is_duplicate))
     reasons = verdict.reasons.copy()
     independent = None
-    if passed and candidate.type == 'mcq' and max(requested_level, verdict.level) >= 3:
+    calc_check = None
+    level = max(requested_level, verdict.level)
+    numeric_open = candidate.type == 'open' and level >= 3 and calc.numbers_in(candidate.reference_answer)
+    if passed and ((candidate.type == 'mcq' and level >= 3) or numeric_open):
         independent = llm.json(
-            'Реши тестовый вопрос независимо. Ответ автора и его объяснение намеренно скрыты. '
+            ('Реши тестовый вопрос независимо. ' if candidate.type == 'mcq' else 'Реши открытую задачу независимо. ') +
+            'Ответ автора и его объяснение намеренно скрыты. '
             'Готовые примеры источника тоже скрыты, чтобы не подменить ими условия вопроса. '
             'Вычисли или логически выведи ответ именно из данных вопроса: чисел, ограничений, критерия, единиц. '
             'Не добавляй недостающие факты. Если вопрос не самодостаточен и требует неуказанных условий, '
             'has_single_answer=false и correct_index=null. '
-            'Проверь допустимость и все варианты. Верни индекс единственного правильного ответа 0–3, '
-            'самостоятельное решение и обоснование. Если правильного варианта нет или их несколько, '
-            'has_single_answer=false и correct_index=null.',
+            + ('Проверь допустимость и все варианты. Верни индекс единственного правильного ответа 0–3, '
+               'самостоятельное решение и обоснование. Если правильного варианта нет или их несколько, '
+               'has_single_answer=false и correct_index=null. ' if candidate.type == 'mcq' else
+               'Для открытой задачи correct_index=null, в answer дай итоговый ответ. ') +
+            'Если итоговый ответ — одно число, в calculation запиши одно арифметическое выражение из чисел условия '
+            '(только числа, + - * / ** скобки, sqrt, min, max, round, log), значение которого равно этому числу; '
+            'иначе calculation=null. Сервер вычислит выражение программно.',
             {'text': candidate.text, 'options': candidate.options}, IndependentAnswer)
-        if not independent.has_single_answer or independent.correct_index != candidate.correct_index:
+        if candidate.type == 'mcq' and (not independent.has_single_answer or independent.correct_index != candidate.correct_index):
             passed = False
             reasons.append('Независимое решение не подтвердило указанный правильный вариант. Проверьте условия, вычисления и варианты ответа.')
+        expected = candidate.options[candidate.correct_index] if candidate.type == 'mcq' else candidate.reference_answer
+        status, value = calc.check(independent.calculation, expected)
+        calc_check = {'expression': independent.calculation, 'value': value, 'status': status}
+        if status == 'mismatch':
+            passed = False
+            reasons.append(f'Программная проверка вычисления: выражение «{independent.calculation}» = {value:g}, '
+                           'но это число не найдено в правильном ответе. Проверьте расчёт.')
+        elif status == 'match':
+            reasons.append(f'Вычисление проверено программно: {independent.calculation} = {value:g}.')
     if verdict.is_duplicate:
         reasons.append('AI-проверка обнаружила смысловой повтор сохранённого вопроса.')
     if not language_ok:
@@ -161,5 +179,6 @@ def evaluate(llm, candidate, fragments, document_id, requested_level, target_top
         'checked_level': verdict.level, 'difficulty_reason': verdict.difficulty_reason,
         'level_mismatch': mismatch, 'needs_recheck': False,
         'validation': {**verdict.model_dump(), 'passed': passed, 'reasons': reasons,
-                       'independent_solution': independent.model_dump() if independent else None},
+                       'independent_solution': independent.model_dump() if independent else None,
+                       'calc_check': calc_check},
     }, 'passed' if passed else 'failed'
