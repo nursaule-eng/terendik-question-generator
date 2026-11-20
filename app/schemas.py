@@ -110,10 +110,25 @@ class AssignmentRequest(Strict):
     language: Literal['auto', 'kk', 'ru', 'en'] = 'auto'
     show_answers: bool = True
     ui_language: Literal['kk', 'ru', 'en'] = 'ru'
+    adaptive: bool = False
+    adaptive_length: int = Field(default=10, ge=3, le=30)
 
 
 class AssignmentUpdate(Strict):
     is_open: bool
+
+
+class AdaptiveStart(Strict):
+    document_id: str
+    topic_id: int | None = None
+    language: Literal['auto', 'kk', 'ru', 'en'] = 'auto'
+    length: int = Field(default=10, ge=3, le=30)
+    start_level: int = Field(default=2, ge=1, le=5)
+
+
+class AdaptiveAnswer(Strict):
+    question_id: str
+    answer: int | None = None
 
 
 class StudentStart(Strict):

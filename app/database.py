@@ -250,6 +250,8 @@ MIGRATIONS = [
     ('attempts', 'access_key', 'TEXT'),
     ('attempts', 'grades', "TEXT DEFAULT '{}'"),
     ('attempts', 'grading_status', "TEXT DEFAULT ''"),
+    ('attempts', 'mode', "TEXT DEFAULT 'standard'"),
+    ('attempts', 'adaptive', "TEXT DEFAULT '{}'"),
 ]
 
 ACTIVE_JOB_STATES = ('queued', 'running', 'waiting', 'paused')

@@ -17,8 +17,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import database as store
 from app.database import connect, dumps, question
-from app.schemas import (AssignmentRequest, AssignmentUpdate, Candidate, Edit, Generate, Review, SelfScores,
-                         StudentStart, Submit, TestRequest)
+from app.schemas import (AdaptiveAnswer, AdaptiveStart, AssignmentRequest, AssignmentUpdate, Candidate, Edit,
+                         Generate, Review, SelfScores, StudentStart, Submit, TestRequest)
+from app.services import adaptive
 from app.services import export as exporter
 from app.services.documents import chunks, extract, legacy_font_used
 from app.services.generation import is_running_here, run_generation, summary
@@ -487,10 +488,12 @@ def attempts(document_id: str):
         rows = db.execute('SELECT * FROM attempts WHERE document_id=? AND assignment_id IS NULL ORDER BY created_at DESC,rowid DESC LIMIT 30', (document_id,)).fetchall()
         result = []
         for row in rows:
-            item = {k: row[k] for k in ('id', 'status', 'created_at', 'finished_at')}
+            item = {k: row[k] for k in ('id', 'status', 'created_at', 'finished_at', 'mode')}
             if row['status'] == 'finished':
                 summary_ = present(row)
                 item.update({k: summary_[k] for k in ('correct', 'total', 'percent', 'points', 'max_points', 'grading_status')})
+                if summary_.get('adaptive'):
+                    item['estimate'] = summary_['adaptive']['estimate']
             result.append(item)
         return result
 
@@ -553,6 +556,62 @@ def self_scores(aid: str, scores: SelfScores):
         saved = json.loads(row['self_scores']) | scores.scores
         db.execute('UPDATE attempts SET self_scores=? WHERE id=?', (dumps(saved), aid))
     return {'message': 'Самооценка сохранена. Это ваша оценка, а не объективная проверка.'}
+
+
+# ------------------------------------------------------------ adaptive testing
+def adaptive_pool(db, document_id, topic_id=None, language='auto'):
+    return question_pool(db, TestRequest(document_id=document_id, topic_id=topic_id, count=50, level=None,
+                                         type='mcq', language=language))
+
+
+def create_adaptive(db, document_id, pool, length, start_level, assignment_id=None, student_name=None, key=None):
+    if len(pool) < 3:
+        raise HTTPException(409, 'Для адаптивного теста нужно минимум 3 принятых тестовых (MCQ) вопроса.')
+    if len({q['checked_level'] for q in pool}) < 2:
+        raise HTTPException(409, 'Для адаптивного теста нужны принятые тестовые вопросы хотя бы двух разных уровней.')
+    state, first = adaptive.new_state(pool, length, start_level)
+    attempt_id = uuid.uuid4().hex
+    db.execute('INSERT INTO attempts(id,document_id,snapshot,answers,mode,adaptive,assignment_id,student_name,access_key) '
+               "VALUES(?,?,?,?,'adaptive',?,?,?,?)",
+               (attempt_id, document_id, dumps([first]), '{}', dumps(state), assignment_id, student_name, key))
+    return attempt_id
+
+
+def adaptive_step(db, row, step, background_tasks=None):
+    if row['mode'] != 'adaptive':
+        raise HTTPException(409, 'Это не адаптивная попытка.')
+    if row['status'] != 'active':
+        raise HTTPException(409, 'Попытка уже завершена.')
+    try:
+        feedback, following, state, snapshot, answers = adaptive.answer(row, step.question_id, step.answer)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    state_json, snapshot_json, answers_json = adaptive.dump(state, snapshot, answers)
+    if following:
+        db.execute('UPDATE attempts SET adaptive=?,snapshot=?,answers=? WHERE id=?', (state_json, snapshot_json, answers_json, row['id']))
+        return {'feedback': feedback, 'next': adaptive.public(following, state), 'finished': False}
+    db.execute("UPDATE attempts SET adaptive=?,snapshot=?,answers=?,status='finished',finished_at=CURRENT_TIMESTAMP WHERE id=?",
+               (state_json, snapshot_json, answers_json, row['id']))
+    return {'feedback': feedback, 'next': None, 'finished': True, 'result': adaptive.summary(state)}
+
+
+@app.post('/api/adaptive', status_code=201)
+def start_adaptive(params: AdaptiveStart):
+    with connect() as db:
+        require_ready(db, params.document_id, params.topic_id)
+        pool = adaptive_pool(db, params.document_id, params.topic_id, params.language)
+        attempt_id = create_adaptive(db, params.document_id, pool, params.length, params.start_level)
+        return present(db.execute('SELECT * FROM attempts WHERE id=?', (attempt_id,)).fetchone())
+
+
+@app.post('/api/adaptive/{aid}/answer')
+def adaptive_answer(aid: str, step: AdaptiveAnswer):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        row = db.execute('SELECT * FROM attempts WHERE id=? AND assignment_id IS NULL', (aid,)).fetchone()
+        if not row:
+            raise HTTPException(404, 'Попытка не найдена.')
+        return adaptive_step(db, row, step)
 
 
 # ------------------------------------------------------------ statistics and export
@@ -627,6 +686,8 @@ def assignment_summary(db, row):
     item['is_open'] = bool(row['is_open'])
     item['settings'] = json.loads(row['settings'] or '{}')
     item['question_count'] = len(json.loads(row['snapshot']))
+    if item['settings'].get('adaptive'):
+        item['question_count'] = min(item['settings'].get('adaptive_length', 10), item['question_count'])
     rows = db.execute('SELECT * FROM attempts WHERE assignment_id=? ORDER BY created_at DESC,rowid DESC', (row['id'],)).fetchall()
     results = []
     for attempt_row in rows:
@@ -635,6 +696,8 @@ def assignment_summary(db, row):
         if attempt_row['status'] == 'finished':
             data = present(attempt_row)
             entry.update({k: data[k] for k in ('correct', 'total', 'points', 'max_points', 'percent', 'grading_status')})
+            if data.get('adaptive'):
+                entry['estimate'] = data['adaptive']['estimate']
         results.append(entry)
     item['results'] = results
     item['finished'] = sum(r['status'] == 'finished' for r in results)
@@ -644,12 +707,18 @@ def assignment_summary(db, row):
 @app.post('/api/assignments', status_code=201)
 def create_assignment(params: AssignmentRequest):
     generate_like = TestRequest(document_id=params.document_id, topic_id=params.topic_id, count=min(params.count, 50),
-                                level=params.level, type=params.type, language=params.language)
+                                level=None if params.adaptive else params.level,
+                                type='mcq' if params.adaptive else params.type, language=params.language)
     with connect() as db:
         pool = question_pool(db, generate_like)
         if not pool:
             raise HTTPException(409, 'Нет принятых вопросов с выбранными параметрами. Сначала примите вопросы в банке.')
-        chosen = [snapshot_of(q) for q in balanced_sample(pool, params.count)]
+        if params.adaptive:
+            if len(pool) < 3 or len({q['checked_level'] for q in pool}) < 2:
+                raise HTTPException(409, 'Для адаптивного теста нужны минимум 3 принятых тестовых вопроса хотя бы двух уровней.')
+            chosen = [snapshot_of(q) for q in pool]  # the whole MCQ pool; each student walks their own path
+        else:
+            chosen = [snapshot_of(q) for q in balanced_sample(pool, params.count)]
         assignment_id, token = uuid.uuid4().hex, secrets.token_urlsafe(9)
         settings = params.model_dump(exclude={'document_id', 'title'}) | {'available': len(pool)}
         db.execute('INSERT INTO assignments(id,token,document_id,title,settings,snapshot) VALUES(?,?,?,?,?,?)',
@@ -753,8 +822,10 @@ def student_assignment(token: str):
         row = open_assignment(db, token)
         settings = json.loads(row['settings'] or '{}')
         snapshot = json.loads(row['snapshot'])
-        return {'title': row['title'], 'is_open': bool(row['is_open']), 'question_count': len(snapshot),
-                'open_questions': sum(q['type'] == 'open' for q in snapshot),
+        adaptive_mode = bool(settings.get('adaptive'))
+        return {'title': row['title'], 'is_open': bool(row['is_open']), 'adaptive': adaptive_mode,
+                'question_count': min(settings.get('adaptive_length', 10), len(snapshot)) if adaptive_mode else len(snapshot),
+                'open_questions': 0 if adaptive_mode else sum(q['type'] == 'open' for q in snapshot),
                 'ui_language': settings.get('ui_language', 'ru'), 'show_answers': settings.get('show_answers', True)}
 
 
@@ -773,9 +844,15 @@ def student_start(token: str, start: StudentStart, request: Request):
         if not assignment['is_open']:
             raise HTTPException(409, 'Преподаватель закрыл приём ответов по этому тесту.')
         questions = json.loads(assignment['snapshot'])
+        settings = json.loads(assignment['settings'] or '{}')
+        attempt_id, key = uuid.uuid4().hex, secrets.token_urlsafe(24)
+        if settings.get('adaptive'):
+            attempt_id = create_adaptive(db, assignment['document_id'], questions, settings.get('adaptive_length', 10), 2,
+                                         assignment['id'], ' '.join(start.name.split()), key)
+            data = student_view(assignment, db.execute('SELECT * FROM attempts WHERE id=?', (attempt_id,)).fetchone())
+            return data | {'access_key': key}
         random.shuffle(questions)
         snapshot = [shuffle_options(q) for q in questions]
-        attempt_id, key = uuid.uuid4().hex, secrets.token_urlsafe(24)
         db.execute('INSERT INTO attempts(id,document_id,snapshot,assignment_id,student_name,access_key) VALUES(?,?,?,?,?,?)',
                    (attempt_id, assignment['document_id'], dumps(snapshot), assignment['id'], ' '.join(start.name.split()), key))
         data = student_view(assignment, db.execute('SELECT * FROM attempts WHERE id=?', (attempt_id,)).fetchone())
@@ -787,6 +864,21 @@ def student_get(token: str, aid: str, x_attempt_key: str = Header(default='')):
     with connect() as db:
         assignment, row = student_attempt(db, token, aid, x_attempt_key)
         return student_view(assignment, row)
+
+
+@app.post('/api/s/{token}/attempts/{aid}/answer')
+def student_adaptive_answer(token: str, aid: str, step: AdaptiveAnswer, x_attempt_key: str = Header(default='')):
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        assignment, row = student_attempt(db, token, aid, x_attempt_key)
+        if row['status'] == 'active' and not assignment['is_open']:
+            raise HTTPException(409, 'Преподаватель закрыл приём ответов по этому тесту.')
+        result = adaptive_step(db, row, step)
+        settings = json.loads(assignment['settings'] or '{}')
+        if not settings.get('show_answers', True):
+            result['feedback'].pop('correct_index', None)
+            result['feedback'].pop('explanation', None)
+        return result
 
 
 @app.post('/api/s/{token}/attempts/{aid}/finish')
