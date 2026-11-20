@@ -66,7 +66,7 @@ def _extract(path: Path, extension: str):
             with pymupdf.open(path) as pdf:
                 if pdf.needs_pass:
                     raise ValueError('PDF защищён паролем. Загрузите незашифрованный файл.')
-                pages = [(i + 1, page.get_text(sort=True)) for i, page in enumerate(pdf)]
+                pages = [(i + 1, page_text(page)) for i, page in enumerate(pdf)]
         except (pymupdf.FileDataError, RuntimeError) as exc:
             raise ValueError('Не удалось открыть PDF: файл повреждён или имеет другой формат.') from exc
         if not any(text.strip() for _, text in pages):
@@ -84,6 +84,70 @@ def _extract(path: Path, extension: str):
     if not text.strip():
         raise ValueError('Документ пуст.')
     return [(None, text)]
+
+
+def page_pieces(page):
+    """Text pieces with positions. A visual line is split where a wide horizontal gap
+    separates two columns."""
+    pieces = []
+    for block in page.get_text('dict', sort=True)['blocks']:
+        for line in block.get('lines', []):
+            current = None
+            for span in line['spans']:
+                text = span['text']
+                if not text.strip():
+                    continue
+                x0, y0, x1, _ = span['bbox']
+                if current and x0 - current['x1'] < 30:
+                    current['text'] += text
+                    current['x1'] = x1
+                else:
+                    current = {'x0': x0, 'y0': y0, 'x1': x1, 'text': text}
+                    pieces.append(current)
+    return pieces
+
+
+def page_text(page):
+    """Reading order that keeps columns apart.
+
+    Slides and two-column pages put several columns side by side; plain
+    line-sorted extraction interleaves them («жауап береді. BI-ның ең озық және …
+    Мысалы …»), which breaks quotes. Pieces are grouped into columns by their left
+    edge and read column by column, top to bottom.
+    """
+    pieces = page_pieces(page)
+    if len(pieces) < 2:
+        return page.get_text(sort=True)
+    width = page.rect.width
+    wide = [p for p in pieces if p['x1'] - p['x0'] > width * .55]
+    narrow = [p for p in pieces if p not in wide]
+    lefts = sorted({round(p['x0']) for p in narrow})
+    if not lefts:
+        return page.get_text(sort=True)
+    columns, current = [], [lefts[0]]
+    for x in lefts[1:]:
+        if x - current[-1] > 60:
+            columns.append(current)
+            current = [x]
+        else:
+            current.append(x)
+    columns.append(current)
+    if len(columns) == 1:
+        return page.get_text(sort=True)
+    starts = [c[0] for c in columns]
+
+    def column(piece):
+        return max(i for i, x in enumerate(starts) if round(piece['x0']) >= x)
+
+    ordered = sorted(wide, key=lambda p: p['y0']) + sorted(narrow, key=lambda p: (column(p), p['y0'], p['x0']))
+    lines, previous = [], None
+    for piece in ordered:
+        key = column(piece) if piece in narrow else -1
+        if previous is not None and key != previous:
+            lines.append('')  # blank line between columns
+        lines.append(' '.join(piece['text'].split()))
+        previous = key
+    return '\n'.join(lines)
 
 
 def decode_legacy(raw):

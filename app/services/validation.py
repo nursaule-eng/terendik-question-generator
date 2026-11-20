@@ -1,5 +1,6 @@
 import re
 from difflib import SequenceMatcher
+from functools import lru_cache
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -15,6 +16,7 @@ def whitespace(text):
     return ' '.join(text.split()).casefold().replace('ё', 'е')
 
 
+@lru_cache(maxsize=4096)
 def normalized(text):
     return re.sub(r'[^\w]+', ' ', whitespace(text)).strip()
 
@@ -30,8 +32,9 @@ CHAR_THRESHOLD = .87
 MIN_CORE_OVERLAP = .75
 
 
+@lru_cache(maxsize=4096)
 def concept_tokens(text):
-    return {word[:5] if len(word) >= 6 else word for word in normalized(text).split() if word not in QUESTION_WORDS}
+    return frozenset(word[:5] if len(word) >= 6 else word for word in normalized(text).split() if word not in QUESTION_WORDS)
 
 
 def duplicate_match(text, other):
@@ -39,7 +42,9 @@ def duplicate_match(text, other):
     other_norm = normalized(other)
     if norm == other_norm:
         return {'method': 'normalized_exact', 'score': 1.0}
-    sequence = SequenceMatcher(None, norm, other_norm).ratio()
+    sequence = SequenceMatcher(None, norm, other_norm, autojunk=False).quick_ratio()
+    if sequence >= SEQUENCE_THRESHOLD:
+        sequence = SequenceMatcher(None, norm, other_norm).ratio()
     # Distinct numerical conditions may be distinct application tasks. Leave
     # those to the semantic reviewer rather than rejecting by surface wording.
     if re.findall(r'\d+(?:[.,]\d+)?', norm) != re.findall(r'\d+(?:[.,]\d+)?', other_norm):
@@ -51,6 +56,8 @@ def duplicate_match(text, other):
         return {'method': 'sequence', 'score': round(sequence, 4)}
     if len(tokens) >= 2 and len(other_tokens) >= 2 and overlap >= CONCEPT_THRESHOLD:
         return {'method': 'concept_tokens', 'score': round(overlap, 4)}
+    if overlap < MIN_CORE_OVERLAP:
+        return None  # the character check below requires this overlap anyway; skip the costly fit
     try:
         # Pairwise IDF makes the threshold independent of unrelated bank entries.
         matrix = TfidfVectorizer(analyzer='char_wb', ngram_range=(3, 5), max_features=35000).fit_transform([text, other])
@@ -104,6 +111,46 @@ def dehyphen(text):
 
 
 def find_quote(quote, text):
+    """See _find_quote; additionally accepts «part … part» quotes when every part is in the source."""
+    found = _find_quote(quote, text)
+    if found is not None:
+        return found
+    parts = [p.strip(' "«»“”') for p in re.split(r'\.\.\.|…', quote) if len(normalized(p).split()) >= 3]
+    if len(parts) >= 2:
+        spans = [_find_quote(part, text) for part in parts]
+        if all(spans):
+            return ' … '.join(spans)
+    return longest_run(quote, text)
+
+
+def longest_run(quote, text, min_words=8, min_share=.5):
+    """Slides and multi-column PDFs interleave lines, so a long quote may exist only in pieces.
+    Accept the longest verbatim run if it covers at least half of the quote (and ≥ 8 words);
+    the stored quote becomes exactly that run."""
+    source = dehyphen(text)
+    tokens = list(re.finditer(r'\w+', source))
+    words = [m.group().casefold().replace('ё', 'е') for m in tokens]
+    wanted = normalized(dehyphen(quote)).split()
+    if len(wanted) < min_words:
+        return None
+    best = (0, 0)
+    positions = {}
+    for i, w in enumerate(words):
+        positions.setdefault(w, []).append(i)
+    for j in range(len(wanted)):
+        for i in positions.get(wanted[j], []):
+            k = 0
+            while j + k < len(wanted) and i + k < len(words) and words[i + k] == wanted[j + k]:
+                k += 1
+            if k > best[1]:
+                best = (i, k)
+    start, length = best
+    if length >= min_words and length >= min_share * len(wanted):
+        return ' '.join(source[tokens[start].start():tokens[start + length - 1].end()].split())
+    return None
+
+
+def _find_quote(quote, text):
     """Return the verbatim source span supporting `quote`, or None.
 
     1) exact match ignoring whitespace; 2) match ignoring punctuation, quotes, dashes
