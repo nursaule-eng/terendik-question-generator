@@ -69,6 +69,11 @@ class IndependentAnswer(Strict):
     calculation: str | None = Field(default=None, max_length=400)
 
 
+class AnswerAgreement(Strict):
+    matches: bool
+    reason: str = Field(min_length=2, max_length=2000)
+
+
 class Grade(Strict):
     score: int = Field(ge=0, le=10)
     strengths: str = Field(default='', max_length=2000)

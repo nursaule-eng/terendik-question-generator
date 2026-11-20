@@ -51,11 +51,15 @@ def _walk(node, depth=0):
 
 def evaluate_expression(expression):
     text = (expression or '').strip().replace('^', '**').replace('×', '*').replace('·', '*').replace('÷', '/').replace('−', '-')
-    text = re.sub(r'(?<=\d),(?=\d{1,2}\b)', '.', text)  # decimal comma 2,5 → 2.5 (not 1,000)
     if not text or len(text) > 400:
         raise CalcError('Пустое или слишком длинное выражение.')
     try:
         tree = ast.parse(text, mode='eval')
+        # Commas inside calls separate arguments: max(2,3) must stay max(2,3).
+        # A top-level tuple such as 2,5*2 is instead decimal-comma notation.
+        if isinstance(tree.body, ast.Tuple):
+            text = re.sub(r'(?<=\d),(?=\d{1,2}\b)', '.', text)
+            tree = ast.parse(text, mode='eval')
         value = _walk(tree)
     except (SyntaxError, ZeroDivisionError, OverflowError, TypeError, ValueError) as exc:
         raise CalcError(str(exc)) from None
@@ -83,7 +87,7 @@ def numbers_in(text):
 
 
 def close(a, b):
-    return math.isclose(a, b, rel_tol=0.011, abs_tol=0.011) or math.isclose(a * 100, b, rel_tol=0.011) or math.isclose(a, b * 100, rel_tol=0.011)
+    return math.isclose(a, b, rel_tol=0.011, abs_tol=1e-9)
 
 
 def check(expression, expected_text):
@@ -95,6 +99,12 @@ def check(expression, expected_text):
     except CalcError:
         return 'skipped', None
     expected = numbers_in(expected_text)
-    if not expected:
+    # Multiple numbers may be intermediate steps, bounds, or rubric weights.
+    # They cannot establish which number is the final answer.
+    if len(expected) != 1:
         return 'skipped', value
-    return ('match' if any(close(value, number) for number in expected) else 'mismatch'), value
+    number = expected[0]
+    matches = close(value, number)
+    if '%' in expected_text:
+        matches = matches or close(value * 100, number)
+    return ('match' if matches else 'mismatch'), value
