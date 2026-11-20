@@ -21,8 +21,17 @@ def present(row, show_answers=True):
               'created_at': row['created_at'], 'finished_at': row['finished_at'],
               'student_name': row['student_name'] if 'student_name' in keys else None,
               'assignment_id': row['assignment_id'] if 'assignment_id' in keys else None}
+    if 'mode' in keys and row['mode'] == 'adaptive':
+        result['mode'] = 'adaptive'
     if row['status'] == 'active':
         result['questions'] = [{k: q[k] for k in PUBLIC_ACTIVE} for q in snapshot]
+        if result.get('mode') == 'adaptive':
+            state = json.loads(row['adaptive'] or '{}')
+            answered = json.loads(row['answers'] or '{}')
+            current = snapshot[-1]
+            result['current'] = None if current['id'] in answered else {
+                'question': {k: current[k] for k in ('id', 'text', 'type', 'options', 'topic') if k in current},
+                'level': current['checked_level'], 'index': len(state.get('history', [])) + 1, 'length': state.get('length')}
         return result
     answers = json.loads(row['answers'] or '{}')
     grades = json.loads((row['grades'] if 'grades' in keys else None) or '{}')
@@ -57,6 +66,10 @@ def present(row, show_answers=True):
         for q in snapshot:
             q.pop('validation', None)
     result['questions'] = snapshot
+    if 'mode' in keys and row['mode'] == 'adaptive':
+        from app.services.adaptive import summary as adaptive_summary
+        result['mode'] = 'adaptive'
+        result['adaptive'] = adaptive_summary(json.loads(row['adaptive'] or '{}'))
     return result
 
 

@@ -98,6 +98,53 @@ def nearest_questions(candidate, existing, limit=12):
              'level': q.get('checked_level'), 'type': q.get('type')} for _, q in scored[:limit]]
 
 
+def dehyphen(text):
+    """Join words split by a line-end hyphen in PDFs: «визуализа-\nциялау» → «визуализациялау»."""
+    return re.sub(r'(\w)[-\u00ad]\s*\n\s*(\w)', r'\1\2', text)
+
+
+def find_quote(quote, text):
+    """Return the verbatim source span supporting `quote`, or None.
+
+    1) exact match ignoring whitespace; 2) match ignoring punctuation, quotes, dashes
+    and PDF hyphenation; 3) near-verbatim match (≥ 92 % similar, at least 5 words)
+    to tolerate a changed ending or a typo the model silently fixed. In cases 2–3 the
+    stored quote becomes the exact text of the source, so nothing invented is shown.
+    """
+    if whitespace(quote) in whitespace(text):
+        return quote
+    source = dehyphen(text)
+    tokens = list(re.finditer(r'\w+', source))
+    words = [m.group().casefold().replace('ё', 'е') for m in tokens]
+    wanted = normalized(dehyphen(quote)).split()
+    n = len(wanted)
+    if not n or n > len(words):
+        return None
+
+    def span(i, length):
+        return ' '.join(source[tokens[i].start():tokens[i + length - 1].end()].split())
+
+    for i in range(len(words) - n + 1):
+        if words[i:i + n] == wanted:
+            return span(i, n)
+    if n < 5:
+        return None
+    target = ' '.join(wanted)
+    best, best_ratio = None, 0.0
+    for length in (n - 1, n, n + 1):
+        if length < 1 or length > len(words):
+            continue
+        for i in range(len(words) - length + 1):
+            if words[i][:3] != wanted[0][:3] and words[i + length - 1][:3] != wanted[-1][:3]:
+                continue
+            ratio = SequenceMatcher(None, target, ' '.join(words[i:i + length]), autojunk=False).ratio()
+            if ratio > best_ratio:
+                best, best_ratio = (i, length), ratio
+    if best and best_ratio >= 0.92:
+        return span(*best)
+    return None
+
+
 def validate_sources(candidate, fragments, document_id):
     by_id = {f['id']: f for f in fragments if f['document_id'] == document_id}
     enriched = []
@@ -105,9 +152,10 @@ def validate_sources(candidate, fragments, document_id):
         fragment = by_id.get(source.fragment_id)
         if fragment is None:
             raise ValueError('Источник отсутствует, не передан модели или принадлежит другому документу.')
-        if whitespace(source.quote) not in whitespace(fragment['text']):
+        verbatim = find_quote(source.quote, fragment['text'])
+        if verbatim is None:
             raise ValueError('Подтверждающая цитата не найдена в указанном фрагменте.')
-        enriched.append({**source.model_dump(), 'location': location(fragment)})
+        enriched.append({**source.model_dump(), 'quote': verbatim, 'location': location(fragment)})
     return enriched
 
 
