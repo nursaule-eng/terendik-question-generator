@@ -7,20 +7,21 @@
 <link rel="stylesheet" href="/static/redesign.css">
 </head>
 <body>
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+    <div class="brand-name">Тереңдік</div>
+    <div class="brand-sub">вопросы по учебным материалам</div>
+  </div>
+  <div class="model" id="model"></div>
+</header>
 <div class="app">
   <aside class="shelf" aria-label="Документы">
-    <div class="brand">
-      <div class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-      <div>
-        <div class="brand-name">Тереңдік</div>
-        <div class="brand-sub">Вопросы по учебным материалам</div>
-      </div>
-    </div>
-
     <label class="drop" id="drop">
-      <input type="file" id="file" accept=".pdf,.txt,application/pdf,text/plain">
+      <input type="file" id="file" accept=".pdf,.txt,.docx,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+      <span class="drop-ico" aria-hidden="true">+</span>
       <strong>Загрузить материал</strong>
-      <span>Перетащите PDF или TXT сюда или нажмите, чтобы выбрать. До 20 МБ.</span>
+      <span>PDF, DOCX или TXT до 20 МБ · қазақша, русский, English</span>
     </label>
 
     <div class="shelf-head">
@@ -29,7 +30,7 @@
     </div>
     <nav class="docs" id="docs"></nav>
 
-    <div class="model" id="model"></div>
+    <div class="storage" id="storage"></div>
   </aside>
 
   <main id="main">
@@ -47,7 +48,8 @@
           <button class="step" data-view="material" role="tab"><span class="n">1</span><span>Материал<small>темы и фрагменты</small></span></button>
           <button class="step" data-view="generate" role="tab"><span class="n">2</span><span>Генерация<small>новые вопросы</small></span></button>
           <button class="step" data-view="bank" role="tab"><span class="n">3</span><span>Банк<small>проверка преподавателем</small></span></button>
-          <button class="step" data-view="test" role="tab"><span class="n">4</span><span>Тест<small>проверка знаний</small></span></button>
+          <button class="step" data-view="test" role="tab"><span class="n">4</span><span>Тест<small>пробная попытка</small></span></button>
+          <button class="step" data-view="students" role="tab"><span class="n">5</span><span>Студенты<small>тест по ссылке и итоги</small></span></button>
         </nav>
       </header>
 
@@ -74,9 +76,10 @@
             <div class="field">Тип вопросов<div class="seg" id="gen-type"></div></div>
             <label class="field">Язык вопросов<select id="gen-language"><option value="auto">Как в документе</option><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
           </div>
+          <p class="note" id="gen-capacity" hidden></p>
           <div class="actions" data-layout="2">
             <button class="btn gold big" id="gen-button" type="submit">Создать вопросы</button>
-            <span class="hint">Каждый вопрос проходит отдельную AI-проверку, поэтому генерация занимает несколько минут.</span>
+            <span class="hint">Каждый вопрос проходит отдельную AI-проверку. Можно закрыть вкладку: генерация продолжится на сервере и переживёт перезапуск.</span>
           </div>
         </form>
         <div class="panel">
@@ -91,6 +94,13 @@
           <div class="panel-head"><div><h2>Состояние банка</h2><p class="lead">Для защиты нужно не меньше 50 вопросов на всех пяти уровнях.</p></div></div>
           <div class="stats" id="bank-stats"></div>
           <div class="coverage" id="coverage" aria-label="Распределение вопросов по уровням"></div>
+          <div class="actions export-bar">
+            <span class="hint">Выгрузить принятые вопросы:</span>
+            <a class="btn" id="exp-docx" download>Word с ответами</a>
+            <a class="btn" id="exp-docx-students" download>Word для студентов</a>
+            <a class="btn ghost" id="exp-csv" download>CSV (Excel)</a>
+            <a class="btn ghost" id="exp-json" download>JSON</a>
+          </div>
         </div>
         <form class="panel" id="filter-form">
           <div class="grid g4">
@@ -122,9 +132,34 @@
         </form>
         <div id="attempt"></div>
         <div class="panel">
-          <div class="panel-head"><div><h2>Попытки</h2></div></div>
+          <div class="panel-head"><div><h2>Мои пробные попытки</h2><p class="lead">Попытки студентов собраны во вкладке «Студенты».</p></div></div>
           <div class="history" id="history"></div>
         </div>
+      </section>
+
+      <!-- 5. Студенты -->
+      <section class="view" id="view-students">
+        <form class="panel" id="assign-form">
+          <div class="panel-head"><div><h2>Тест для студентов по ссылке</h2><p class="lead">Студент открывает ссылку без пароля, вводит имя и проходит тест. Банк, ответы и удаление ему недоступны. Все студенты получают одни и те же вопросы в разном порядке.</p></div></div>
+          <div class="grid g3">
+            <label class="field">Название<input id="as-title" required maxlength="200" placeholder="Например: Контрольная по теме 2"></label>
+            <label class="field">Тема<select id="as-topic" class="topic-select"></select></label>
+            <label class="field">Количество вопросов<input id="as-count" type="number" min="1" max="100" value="15"></label>
+          </div>
+          <div class="grid g4">
+            <label class="field">Уровень<select id="as-level"><option value="">Все уровни поровну</option><option value="1">1 · Факт</option><option value="2">2 · Понимание</option><option value="3">3 · Применение</option><option value="4">4 · Анализ</option><option value="5">5 · Синтез</option></select></label>
+            <div class="field">Тип<div class="seg" id="as-type"></div></div>
+            <label class="field">Язык интерфейса студента<select id="as-ui"><option value="kk">Қазақша</option><option value="ru">Русский</option><option value="en">English</option></select></label>
+            <label class="field">После завершения<select id="as-show"><option value="1">Показать правильные ответы</option><option value="0">Показать только баллы</option></select></label>
+          </div>
+          <div class="actions"><button class="btn gold big" type="submit">Создать ссылку</button><span class="hint">Открытые ответы оценивает ИИ (0–10) с комментарием; итог видят студент и преподаватель.</span></div>
+        </form>
+        <div class="grid" id="assignments"></div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Статистика знаний</h2><p class="lead">По всем завершённым попыткам этого материала: студентов и ваших пробных.</p></div></div>
+          <div id="stats"></div>
+        </div>
+        <div id="result-view"></div>
       </section>
     </div>
   </main>

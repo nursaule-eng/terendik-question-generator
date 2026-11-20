@@ -7,9 +7,10 @@ const LEVELS = [
   {n:4, name:'Анализ', desc:'Разобрать, найти ошибку', color:'var(--l4)'},
   {n:5, name:'Синтез', desc:'Предложить и обосновать решение', color:'var(--l5)'},
 ];
-const LBL = {ready:'Готов',processing:'Обработка',error:'Ошибка',pending:'Ожидает проверки',accepted:'Принят',rejected:'Отклонён',passed:'AI-проверка пройдена',failed:'AI-проверка не пройдена',stale:'Нужна повторная проверка',queued:'В очереди',running:'Выполняется',done:'Завершено',active:'Не завершена',finished:'Завершена'};
+const LBL = {ready:'Готов',processing:'Обработка',error:'Ошибка',pending:'Ожидает проверки',accepted:'Принят',rejected:'Отклонён',passed:'AI-проверка пройдена',failed:'AI-проверка не пройдена',stale:'Нужна повторная проверка',queued:'В очереди',running:'Выполняется',waiting:'Ожидание лимита',paused:'Пауза',cancelled:'Остановлено',done:'Завершено',active:'Не завершена',finished:'Завершена'};
 const LANG = {kk:'Қазақша',ru:'Русский',en:'English'};
-const S = {doc:null, detail:null, view:'material', jobs:[], trackJob:null, attempt:null, editing:null, polling:false};
+const S = {doc:null, detail:null, view:'material', jobs:[], trackJob:null, attempt:null, editing:null, polling:false, capacity:null, assignments:[], gradingTimer:null};
+const ACTIVE_JOB = ['queued','running','waiting','paused'];
 const $ = id => document.getElementById(id);
 
 /* ---------- helpers ---------- */
@@ -29,7 +30,7 @@ function h(tag, attrs, ...kids){
 }
 function toast(msg, error=false){
   const t = h('div', {class:'toast'+(error?' error':'')}, h('span', {text:msg}));
-  $('toasts').append(t); setTimeout(()=>t.remove(), error ? 9000 : 5000);
+  $('toasts').append(t); while ($('toasts').children.length > 3) $('toasts').firstChild.remove(); setTimeout(()=>t.remove(), error ? 9000 : 5000);
 }
 function confirmAction(message){
   return new Promise(resolve=>{
@@ -53,7 +54,7 @@ async function busy(btn, fn){
   const old = btn ? [...btn.childNodes] : null;
   if (btn){ btn.disabled = true; btn.prepend(h('span',{class:'spin'})); }
   try { await fn(); } catch(e){ toast(e.message, true); }
-  finally { if (btn && btn.isConnected){ btn.replaceChildren(...old); btn.disabled = btn.id==='gen-button' && S.jobs.some(j=>['queued','running'].includes(j.status)); } }
+  finally { if (btn && btn.isConnected){ btn.replaceChildren(...old); btn.disabled = btn.id==='gen-button' && S.jobs.some(j=>ACTIVE_JOB.includes(j.status)); } }
 }
 const btn = (text, cls, fn, extra={}) => { const b = h('button', {type:'button', class:'btn '+(cls||''), ...extra}, text); b.addEventListener('click', ()=>busy(b, fn)); return b; };
 const levelOf = n => LEVELS[(n||1)-1];
@@ -72,7 +73,8 @@ function buildStatic(){
   depth.append(h('label',{class:'lvl mix'}, h('input',{type:'radio',name:'gen-level',value:'',checked:true}), h('div',null, h('div',{class:'t',text:'Смесь 1–5'}), h('div',{class:'d',text:'Равномерно по всем уровням'})), bars(5)));
   for (const l of LEVELS) depth.append(h('label',{class:'lvl'}, h('input',{type:'radio',name:'gen-level',value:String(l.n)}), h('div',null, h('div',{class:'t',text:l.n+'. '+l.name}), h('div',{class:'d',text:l.desc})), bars(l.n)));
   const types = [['mixed','Смешанные'],['mcq','Тестовые'],['open','Открытые']];
-  seg($('gen-type'),'gen-type',types,'mixed'); seg($('test-type'),'test-type',types,'mixed'); seg($('f-type'),'f-type',types,'mixed');
+  seg($('gen-type'),'gen-type',types,'mixed'); seg($('test-type'),'test-type',types,'mixed'); seg($('f-type'),'f-type',types,'mixed'); seg($('as-type'),'as-type',types,'mixed');
+  $('gen-topic').addEventListener('change', ()=>loadCapacity().catch(()=>{})); $('gen-count').addEventListener('input', renderCapacity);
   document.querySelectorAll('input[name="f-type"]').forEach(i => i.addEventListener('change', ()=>loadQuestions().catch(e=>toast(e.message,true))));
   ['f-status','f-auto','f-topic','f-level'].forEach(id => $(id).addEventListener('change', ()=>loadQuestions().catch(e=>toast(e.message,true))));
   document.querySelectorAll('.step').forEach(b => b.addEventListener('click', ()=>show(b.dataset.view)));
@@ -84,8 +86,25 @@ async function loadConfig(){
   const box = $('model');
   box.replaceChildren(...[
     h('div',{class:'model-line'}, h('span',{class:'dot '+(c.configured?'ready':'error')}), c.configured ? 'Модель настроена' : 'Модель не настроена'),
-    c.configured ? null : h('p',{style:'color:#9FB6CA;font-size:12.5px',text:'Заполните '+c.missing.join(', ')+' в .env и перезапустите сервер.'}),
+    c.configured ? null : h('p',{class:'hint',text:'Заполните '+c.missing.join(', ')+' в .env и перезапустите сервер.'}),
     c.configured ? h('button',{class:'link-btn',type:'button',onclick:async e=>{ const b=e.currentTarget; b.textContent='Проверяю соединение…'; try{ const r=await api('/api/model/check',{method:'POST'}); toast(r.message||'Соединение работает'); } catch(err){ toast(err.message,true);} finally{ b.textContent='Проверить соединение'; } }},'Проверить соединение') : null
+  ].filter(Boolean));
+}
+
+async function loadStorage(){
+  const st = await api('/api/storage');
+  const box = $('storage');
+  const restoreInput = h('input',{type:'file',accept:'.json,application/json',hidden:true,onchange:async e=>{
+    const f = e.target.files[0]; if (!f) return;
+    if (!await confirmAction('Восстановить данные из резервной копии? Уже существующие документы будут пропущены, новые — добавлены.')) { e.target.value=''; return; }
+    try{ const fd = new FormData(); fd.append('file', f); const r = await api('/api/backup',{method:'POST',body:fd}); toast(r.message); await loadDocuments(); }
+    catch(err){ toast(err.message,true); } finally{ e.target.value=''; } }});
+  box.replaceChildren(...[
+    st.persistent ? h('div',{class:'storage-ok',text: st.backend==='postgres' ? '● Данные хранятся в базе PostgreSQL и не пропадут при перезапуске.' : '● Данные на постоянном диске.'})
+      : h('div',{class:'storage-warn',text: (st.notice || 'Данные хранятся на временном диске сервера.') + ' Регулярно скачивайте резервную копию.'}),
+    h('a',{class:'link-btn',href:'/api/backup',download:''},'Скачать резервную копию'),
+    h('button',{class:'link-btn',type:'button',onclick:()=>restoreInput.click()},'Восстановить из копии'), restoreInput,
+    location.hostname!=='localhost' && location.hostname!=='127.0.0.1' ? h('a',{class:'link-btn',href:'/logout'},'Выйти') : null
   ].filter(Boolean));
 }
 
@@ -113,6 +132,7 @@ async function loadDocuments(){
 async function upload(file){
   if (!file) return;
   if (file.size > 20*1024*1024) return toast('Файл больше 20 МБ. Сожмите PDF или разделите его на части.', true);
+  if (!/\.(pdf|txt|docx)$/i.test(file.name)) return toast('Поддерживаются PDF с текстовым слоем, DOCX и TXT. Файлы .doc сохраните как .docx.', true);
   const drop = $('drop'); drop.classList.add('busy');
   try{
     const fd = new FormData(); fd.append('file', file);
@@ -124,13 +144,14 @@ async function upload(file){
   finally{ drop.classList.remove('busy'); $('file').value=''; }
 }
 async function selectDocument(id){
-  S.doc = id; S.detail = null; for(const s of document.querySelectorAll('.topic-select'))s.replaceChildren(); S.jobs = []; S.trackJob = null; S.attempt = null;
-  $('attempt').replaceChildren();
+  S.doc = id; S.detail = null; for(const s of document.querySelectorAll('.topic-select'))s.replaceChildren(); S.jobs = []; S.trackJob = null; S.attempt = null; S.capacity = null;
+  $('attempt').replaceChildren(); $('result-view').replaceChildren(); $('gen-language').value = 'auto';
   await loadDetail();
   $('welcome').hidden = true; $('workspace').hidden = false;
   show(S.view);
   await loadDocuments();
-  await Promise.all([loadJobs(), loadQuestions(), loadAttempts()]);
+  updateExportLinks();
+  await Promise.all([loadJobs(), loadQuestions(), loadAttempts(), loadCapacity()]);
 }
 function clearDocument(){
   S.doc = null; S.detail = null;
@@ -139,7 +160,7 @@ function clearDocument(){
 async function loadDetail(){
   if (!S.doc) return;
   const d = await api('/api/documents/'+S.doc); S.detail = d;
-  $('doc-title').textContent = d.name.replace(/\.(pdf|txt)$/i,'');
+  $('doc-title').textContent = d.name.replace(/\.(pdf|txt|docx)$/i,'');
   const fact = (b, t) => h('span',{class:'fact'}, h('b',{text:b}), ' '+t);
   $('doc-facts').replaceChildren(
     h('span',{class:'chip '+(d.status==='ready'?'ok':d.status==='error'?'bad':'warn')}, LBL[d.status]||d.status),
@@ -152,6 +173,7 @@ async function loadDetail(){
   // errors
   const errs = $('doc-errors'); errs.replaceChildren();
   if (d.error) errs.append(h('p',{class:'note bad',text:d.error}));
+  if (d.warning) errs.append(h('p',{class:'note',text:d.warning}));
   if (d.topic_error) errs.append(h('p',{class:'note',text:d.topic_error}));
   if (d.text_length && d.text_length < 20000) errs.append(h('p',{class:'note',text:'Материал короткий ('+d.text_length.toLocaleString('ru-RU')+' символов). Вопросов 4–5 уровня может не хватить: для демонстрации лучше взять полноценную главу или учебник.'}));
   if (errs.children.length) errs.style.marginBottom = '16px';
@@ -161,7 +183,7 @@ async function loadDetail(){
       h('h3',{text:t.name}), t.keywords && t.keywords.length ? h('p',{text:t.keywords.join(', ')}) : null, h('span',{text:'Создать вопросы по теме'})))));
   $('doc-actions').replaceChildren(
     btn('Повторить анализ тем','', async()=>{ await api('/api/documents/'+d.id+'/topics',{method:'POST'}); toast('Поиск тем запущен.'); await loadDetail(); }, {disabled: d.status!=='ready' || d.topic_status==='processing'}),
-    btn('В корзину','danger', async()=>{ if(!await confirmAction('Переместить документ и его вопросы в корзину? Их можно восстановить, попытки сохранятся.')) return; const r = await api('/api/documents/'+d.id,{method:'DELETE'}); toast(r.message||'Документ в корзине'); clearDocument(); await loadDocuments(); })
+    btn('В корзину','danger', async()=>{ if(!await confirmAction('Переместить документ, его вопросы и ссылки для студентов в корзину? Всё можно восстановить, результаты сохранятся.')) return; const r = await api('/api/documents/'+d.id,{method:'DELETE'}); toast(r.message||'Документ в корзине'); clearDocument(); await loadDocuments(); })
   );
   for (const s of document.querySelectorAll('.topic-select')){
     const old = s.value;
@@ -178,6 +200,8 @@ function show(v){
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('active', s.id==='view-'+v));
   if (v==='bank') loadQuestions().catch(e=>toast(e.message,true));
   if (v==='test') loadAttempts().catch(e=>toast(e.message,true));
+  if (v==='students') loadStudents().catch(e=>toast(e.message,true));
+  if (v==='generate') loadCapacity().catch(()=>{});
 }
 
 /* ---------- generation ---------- */
@@ -188,43 +212,110 @@ function params(prefix){
     count: Number($(prefix+'-count').value), level: lv ? Number(lv) : null, type: segVal(prefix+'-type') || 'mixed',
     language: prefix==='gen' ? $('gen-language').value : 'auto' };
 }
+async function loadCapacity(){
+  if (!S.doc) return;
+  const topic = $('gen-topic').value;
+  S.capacity = await api('/api/documents/'+S.doc+'/capacity'+(topic ? '?topic_id='+topic : ''));
+  renderCapacity();
+}
+function renderCapacity(){
+  const box = $('gen-capacity'), c = S.capacity, n = Number($('gen-count').value) || 0;
+  if (!c){ box.hidden = true; return; }
+  const scope = $('gen-topic').value ? 'по этой теме' : 'по материалу';
+  if (n > c.remaining){
+    box.hidden = false; box.className = 'note';
+    box.textContent = c.remaining <= 0
+      ? `Материала ${scope} уже почти исчерпан: в банке ${c.existing} прошедших проверку вопросов при оценке ≈${c.estimate}. Новые вопросы будут чаще отклоняться как повторы — выберите другую тему или загрузите больше материала.`
+      : `Материала ${scope} хватит примерно на ${c.remaining} новых неповторяющихся вопросов (≈${c.estimate} всего, уже есть ${c.existing}). Можно запустить ${n}, но часть может не пройти проверку.`;
+  } else box.hidden = true;
+}
 $('gen-form').addEventListener('submit', e => { e.preventDefault(); busy($('gen-button'), async ()=>{
-  const job = await api('/api/generate',{method:'POST',body:params('gen')}); S.trackJob = job.id;
-  toast('Генерация запущена. Результат появится ниже и в банке вопросов.'); await loadJobs();
+  const p = params('gen');
+  if (!p.count || p.count < 1 || p.count > 50) throw Error('Количество вопросов — от 1 до 50 за один запуск.');
+  if (S.capacity && p.count > S.capacity.remaining && !await confirmAction(S.capacity.remaining <= 0
+      ? 'Материала по выбранной теме, вероятно, уже не хватит на новые неповторяющиеся вопросы. Всё равно запустить?'
+      : `Материала хватит примерно на ${S.capacity.remaining} новых вопросов, а запрошено ${p.count}. Запустить всё равно?`)) return;
+  if (p.level === 5 && p.type === 'mcq') toast('Для 5 уровня лучше открытые вопросы: синтез решения сложно проверить выбором из 4 вариантов.');
+  const job = await api('/api/generate',{method:'POST',body:p}); S.trackJob = job.id;
+  toast('Генерация запущена. Можно закрыть вкладку — работа продолжится на сервере.'); await loadJobs();
 });});
+function stagesOf(j){
+  const st = j.stage || j.message || '';
+  const reading = j.status==='queued' || /Подготовка|читаем/i.test(st);
+  const creating = /Создаётся|Уточняется/.test(st), checking = /Проверяется/.test(st);
+  const cls = on => on ? 'on' : '';
+  return h('div',{class:'stages'},
+    h('span',{class: reading ? 'on' : 'done'},'1 · Читаем материал'),
+    h('span',{class: creating ? 'on' : (checking ? 'done' : (reading ? '' : 'done'))},'2 · Создаём вопрос'),
+    h('span',{class: cls(checking)},'3 · Проверяем'),
+    h('span',{class:''}, `${j.created||0} из ${j.requested} готово`));
+}
+function countdown(resumeAt){
+  if (!resumeAt) return '';
+  const left = Math.max(0, Math.round((new Date(resumeAt.replace(' ','T')+'Z') - Date.now())/1000));
+  if (left > 3600) return 'примерно в ' + new Date(resumeAt.replace(' ','T')+'Z').toLocaleString('ru-RU',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
+  return left > 60 ? `через ${Math.ceil(left/60)} мин.` : `через ${left} сек.`;
+}
 async function loadJobs(){
   if (!S.doc) return;
   const id = S.doc; const jobs = await api('/api/jobs?document_id='+id); if (id!==S.doc) return;
+  const before = S.jobs;
   S.jobs = jobs;
-  const active = jobs.some(j => ['queued','running'].includes(j.status));
+  const active = jobs.some(j => ACTIVE_JOB.includes(j.status));
   $('gen-button').disabled = active;
   const tracked = jobs.find(j => j.id===S.trackJob);
-  if (tracked && !['queued','running'].includes(tracked.status)){
-    toast(tracked.status==='done' ? `Готово: ${tracked.created} новых вопросов прошли проверку.` : (tracked.message||'Генерация завершилась с ошибкой'), tracked.status==='error');
-    S.trackJob = null; loadQuestions().catch(()=>{});
+  if (tracked && !ACTIVE_JOB.includes(tracked.status)){
+    toast(tracked.status==='done' ? `Готово: ${tracked.created} новых вопросов прошли проверку.` : (tracked.message||'Генерация завершилась'), tracked.status==='error');
+    S.trackJob = null; loadQuestions().catch(()=>{}); loadCapacity().catch(()=>{});
+  } else if (before.some(b => { const now = jobs.find(j=>j.id===b.id); return now && now.created !== b.created; })) {
+    loadQuestions().catch(()=>{});
   }
   const box = $('jobs');
   if (!jobs.length){ box.replaceChildren(h('p',{class:'empty',text:'Запусков пока не было. Выберите уровень и нажмите «Создать вопросы».'})); return; }
   const card = j => {
-    const running = ['queued','running'].includes(j.status);
+    const running = ['queued','running','waiting'].includes(j.status);
+    const pct = Math.min(100, Math.round(100*(j.created||0)/Math.max(1,j.requested)));
+    const chipCls = running ? 'sky' : j.status==='done' ? 'ok' : j.status==='paused' ? 'warn' : j.status==='cancelled' ? '' : 'bad';
+    const p = j.params || {};
+    const descr = [p.level ? 'уровень '+p.level : 'уровни 1–5', p.type==='mcq' ? 'тестовые' : p.type==='open' ? 'открытые' : 'смешанные', p.language && p.language!=='auto' ? (LANG[p.language]||p.language) : null].filter(Boolean).join(' · ');
     return h('div',{class:'job'+(j.status==='error'?' err':'')},
-      h('div',{class:'job-top'}, h('span',{class:'chip '+(running?'sky':j.status==='done'?'ok':'bad')}, LBL[j.status]||j.status), h('span',{text:fmtDate(j.created_at)})),
-      running ? h('div',{class:'progress'},h('i')) : null,
-      running && j.message ? h('p',{class:'note',text:j.message}) : null,
-      j.status==='error' ? h('p',{text:j.message||'Ошибка генерации'}) :
-        h('div',{class:'funnel'},
+      h('div',{class:'job-top'}, h('span',{class:'chip '+chipCls}, LBL[j.status]||j.status), h('span',{text:fmtDate(j.created_at)}), descr ? h('span',{text:descr}) : null),
+      running || j.status==='paused' ? stagesOf(j) : null,
+      running || j.status==='paused' ? h('div',{class:'meterbar'}, h('i',{style:'width:'+pct+'%'})) : null,
+      j.status==='waiting' ? h('p',{class:'note',text:'Модель ограничила частоту запросов. Генерация продолжится автоматически '+countdown(j.resume_at)+' Готовые вопросы уже в банке.'}) : null,
+      j.status==='paused' ? h('p',{class:'note',text:(j.message||'')+(j.resume_at ? ' Лимит обычно восстанавливается '+countdown(j.resume_at)+'.' : '')}) : null,
+      running && j.stage && j.status!=='waiting' ? h('p',{class:'hint',text:j.stage}) : null,
+      j.status==='error' || j.status==='cancelled' ? h('p',{text:j.message||'Ошибка генерации'}) : null,
+      !running && j.status!=='paused' ? h('div',{class:'funnel'},
           h('span',null,h('b',{text:j.requested}),'запрошено'),
           h('span',null,h('b',{text:(j.created||0)+(j.rejected||0)}),'проверено'),
           h('span',{style:'color:var(--ok)'},h('b',{text:j.created||0}),'прошли проверку'),
-          h('span',{style:'color:var(--danger)'},h('b',{text:j.rejected||0}),'отклонено')),
-      j.status==='done' && j.created < j.requested ? h('p',{class:'note',text:'Получено меньше запроса. Причины отклонения указаны в комментариях проверки.'}) : null,
-      j.details && j.details.length ? h('details',{class:'more'}, h('summary',null,'Комментарии модели ('+j.details.length+')'), ...j.details.map(t=>h('p',{text:t}))) : null);
+          h('span',{style:'color:var(--danger)'},h('b',{text:j.rejected||0}),'отклонено')) : null,
+      j.status==='done' && j.created < j.requested ? h('p',{class:'note',text:'Получено меньше запроса: материала не хватило на новые неповторяющиеся вопросы или часть не прошла проверку. Причины — в комментариях ниже.'}) : null,
+      h('div',{class:'actions'},
+        running ? btn('Остановить','danger', async()=>{ const r = await api('/api/jobs/'+j.id+'/cancel',{method:'POST'}); toast(r.message); await loadJobs(); }) : null,
+        j.status==='paused' ? btn('Продолжить','gold', async()=>{ const r = await api('/api/jobs/'+j.id+'/resume',{method:'POST'}); S.trackJob=j.id; toast(r.message); await loadJobs(); }) : null,
+        j.status==='paused' ? btn('Завершить','ghost', async()=>{ const r = await api('/api/jobs/'+j.id+'/cancel',{method:'POST'}); toast(r.message); await loadJobs(); }) : null,
+        j.status==='error' && p.document_id ? btn('Продолжить с места ошибки','', async()=>{ const r = await api('/api/jobs/'+j.id+'/resume',{method:'POST'}); S.trackJob=j.id; toast(r.message); await loadJobs(); }) : null,
+        (j.created||0) > 0 && !running ? btn('Открыть в банке','ghost', async()=>{ show('bank'); }) : null),
+      j.details && j.details.length ? h('details',{class:'more'}, h('summary',null,'Комментарии модели и проверки ('+j.details.length+')'), ...j.details.map(t=>h('p',{text:t}))) : null);
   };
   const [first, ...rest] = jobs;
   box.replaceChildren(...[card(first), rest.length ? h('details',{class:'more'}, h('summary',null,'Предыдущие запуски ('+rest.length+')'), h('div',{class:'grid',style:'margin-top:10px'}, ...rest.map(card))) : null].filter(Boolean));
 }
 
 /* ---------- bank ---------- */
+function updateExportLinks(){
+  if (!S.doc) return;
+  const base = '/api/documents/'+S.doc+'/export?scope=accepted&format=';
+  $('exp-docx').href = base+'docx'; $('exp-docx-students').href = base+'docx&answers=false';
+  $('exp-csv').href = base+'csv'; $('exp-json').href = base+'json';
+  for (const id of ['exp-docx','exp-docx-students','exp-csv','exp-json']) $(id).onclick = async e => {
+    // Show a clear message instead of downloading an error page when nothing is accepted yet.
+    const st = await api('/api/documents/'+S.doc+'/bank-status').catch(()=>null);
+    if (st && !st.accepted_for_test){ e.preventDefault(); toast('Сначала примите вопросы в банке: выгружаются только принятые преподавателем.', true); }
+  };
+}
 async function loadQuestions(){
   if (!S.doc) return;
   const qs = new URLSearchParams({document_id:S.doc});
@@ -320,25 +411,39 @@ async function loadAttempts(){
     ok ? null : h('button',{class:'btn',type:'button',onclick:()=>show('bank')},'Открыть банк')));
   $('history').replaceChildren(...(list.length ? list.map(a => h('button',{class:'hist',type:'button',onclick:async()=>{ try{ renderAttempt(await api('/api/attempts/'+a.id)); }catch(e){toast(e.message,true);} }},
       h('b',{text: a.status==='active' ? 'Продолжить попытку' : 'Результат'}),
-      h('span',{text: fmtDate(a.created_at) + (a.status==='finished' && a.total ? ` · ${a.correct} из ${a.total}` : '')}))) : [h('p',{class:'empty',text:'Попыток пока нет.'})]));
+      h('span',{text: fmtDate(a.created_at) + (a.status==='finished' ? (a.percent!=null ? ` · ${a.percent}%` : a.total ? ` · ${a.correct} из ${a.total}` : '') : '')}))) : [h('p',{class:'empty',text:'Попыток пока нет.'})]));
 }
 $('test-form').addEventListener('submit', e => { e.preventDefault(); busy(e.submitter, async ()=>{
   if (S.attempt && S.attempt.status==='active' && !await confirmAction('Начать новую попытку? Текущую можно продолжить из списка попыток.')) return;
   const a = await api('/api/attempts',{method:'POST',body:params('test')});
   renderAttempt(a); toast(`Тест начат: ${a.available ?? a.questions.length} ${plural(a.available ?? a.questions.length,'вопрос','вопроса','вопросов')}.`); await loadAttempts();
 });});
-function renderAttempt(a){
-  S.attempt = a;
+function gradeBox(g){
+  if (!g) return null;
+  return h('div',{class:'grade'}, h('b',{text:'Оценка ИИ: '+g.score+'/10'}),
+    g.strengths ? h('div',null, h('b',{text:'Что хорошо: '}), g.strengths) : null,
+    g.missed ? h('div',null, h('b',{text:'Что упущено: '}), g.missed) : null,
+    g.advice ? h('div',null, h('b',{text:'Что повторить: '}), g.advice) : null);
+}
+function renderAttempt(a, target){
+  if (!target) S.attempt = a;
+  clearTimeout(S.gradingTimer);
+  if (['pending','running'].includes(a.grading_status)) S.gradingTimer = setTimeout(async ()=>{
+    try{ const fresh = await api((a.assignment_id ? '/api/assignment-attempts/' : '/api/attempts/')+a.id); renderAttempt(fresh, target); if (!target) loadAttempts().catch(()=>{}); } catch {}
+  }, 4000);
   const done = a.status === 'finished';
-  const box = $('attempt');
+  const box = target || $('attempt');
   const letters = 'ABCD';
   const form = h('form',{class:'qlist'});
   if (done){
-    const pct = a.total ? Math.round(100*a.correct/a.total) : 0;
+    const grading = ['pending','running'].includes(a.grading_status);
+    const pct = a.percent ?? (a.total ? Math.round(100*a.correct/a.total) : null);
     form.append(h('div',{class:'panel result'},
-      h('div',{class:'ring',style:'--p:'+pct}, h('div',null, h('div',null, h('b',{text: a.total ? pct+'%' : '—'}), h('small',{text:'тестовые'})))),
-      h('div',null, h('h2',{text: !a.total ? 'Тест завершён' : pct>=85 ? 'Отличный результат' : pct>=60 ? 'Хороший результат' : 'Есть что повторить'}),
-        h('p',{class:'lead',text: a.total ? `Верно ${a.correct} из ${a.total} тестовых вопросов. Открытые ответы сравните с эталоном и поставьте себе оценку.` : 'В попытке только открытые вопросы. Сравните ответы с эталоном и оцените себя.'}))));
+      h('div',{class:'ring',style:'--p:'+(pct??0)}, h('div',null, h('div',null, h('b',{text: pct!=null ? pct+'%' : '…'}), h('small',{text: a.percent!=null ? 'итог' : 'тестовые'})))),
+      h('div',{class:'grid'}, h('h2',{text: (a.student_name ? a.student_name+': ' : '') + (pct==null ? 'Тест завершён' : pct>=85 ? 'Отличный результат' : pct>=60 ? 'Хороший результат' : 'Есть что повторить')}),
+        h('p',{class:'lead',text: (a.total ? `Тестовые: верно ${a.correct} из ${a.total}. ` : '') + (a.open_total ? (grading ? 'Открытые ответы проверяет ИИ…' : a.grading_status==='error' ? 'Автопроверка открытых ответов не удалась — запустите её ещё раз.' : `Общий балл: ${a.points} из ${a.max_points}.`) : '')}),
+        grading ? h('div',{class:'progress'},h('i')) : null,
+        a.grading_status==='error' || (a.open_total && !a.grading_status) ? btn('Проверить открытые ответы ИИ','', async()=>{ await api('/api/attempts/'+a.id+'/grade',{method:'POST'}); renderAttempt(await api((a.assignment_id ? '/api/assignment-attempts/' : '/api/attempts/')+a.id), target); }) : null)));
   } else {
     form.append(h('div',{class:'panel'}, h('h2',{text:'Тест'}), h('p',{class:'lead',text:`${a.questions.length} ${plural(a.questions.length,'вопрос','вопроса','вопросов')}. Ответы сохранятся, когда вы завершите тест.`})));
   }
@@ -354,9 +459,10 @@ function renderAttempt(a){
         if (q.user_answer==null) card.append(h('p',{class:'note',text:'Вы пропустили этот вопрос.'}));
       } else card.append(h('div',{class:'choice',role:'radiogroup'}, ...q.options.map((o,j)=>h('label',null, h('input',{type:'radio',name:q.id,value:String(j)}), h('span',{class:'k',text:letters[j]}), h('span',{text:o})))));
     } else if (done){
-      card.append(h('dl',{class:'answer',style:'border:none;padding:0'}, h('div',null,h('dt',{text:'Ваш ответ'}),h('dd',{text:q.user_answer||'Нет ответа'}))));
+      card.append(h('dl',{class:'answer',style:'border:none;padding:0'}, h('div',null,h('dt',{text:'Ответ'}),h('dd',{text:q.user_answer||'Нет ответа'}))));
+      if (q.grade) card.append(gradeBox(q.grade));
       const cur = a.self_scores && a.self_scores[q.id];
-      card.append(h('div',{class:'field'}, 'Ваша оценка по сравнению с эталоном', h('div',{class:'seg'}, ...[0,1,2,3,4,5].map(n=>h('label',null, h('input',{type:'radio',name:q.id,value:String(n),checked:cur!=null && Number(cur)===n}), h('span',{text:String(n)}))))));
+      if (!target) card.append(h('div',{class:'field'}, 'Ваша оценка по сравнению с эталоном', h('div',{class:'seg'}, ...[0,1,2,3,4,5].map(n=>h('label',null, h('input',{type:'radio',name:q.id,value:String(n),checked:cur!=null && Number(cur)===n}), h('span',{text:String(n)}))))));
     } else card.append(h('label',{class:'field'}, 'Ваш ответ', h('textarea',{name:q.id,rows:5,maxlength:12000,placeholder:'Ответьте своими словами'})));
     if (done) card.append(h('details',{class:'reveal',open: q.type==='open' || !q.correct}, h('summary',null,'Эталон и источник'),
       h('div',{class:'answer'}, h('dl',null, h('div',null,h('dt',{text:'Эталонный ответ'}),h('dd',{text:q.reference_answer})), q.explanation ? h('div',null,h('dt',{text:'Объяснение'}),h('dd',{text:q.explanation})) : null),
@@ -365,8 +471,9 @@ function renderAttempt(a){
   });
   const hasOpen = a.questions.some(q=>q.type==='open');
   const submit = h('button',{class:'btn '+(done?'primary':'gold')+' big',type:'submit'}, done ? 'Сохранить самооценку' : 'Завершить тест');
-  if (!done || hasOpen) form.append(h('div',{class:'actions'}, submit, h('button',{class:'btn ghost',type:'button',onclick:()=>{ box.replaceChildren(); S.attempt=null; }}, 'Закрыть')));
-  form.addEventListener('submit', e => { e.preventDefault(); busy(submit, async ()=>{
+  if (target) form.append(h('div',{class:'actions'}, h('button',{class:'btn ghost',type:'button',onclick:()=>{ clearTimeout(S.gradingTimer); box.replaceChildren(); }}, 'Закрыть')));
+  else if (!done || hasOpen) form.append(h('div',{class:'actions'}, submit, h('button',{class:'btn ghost',type:'button',onclick:()=>{ clearTimeout(S.gradingTimer); box.replaceChildren(); S.attempt=null; }}, 'Закрыть')));
+  form.addEventListener('submit', e => { e.preventDefault(); if (target) return; busy(submit, async ()=>{
     const v = new FormData(form);
     if (done){
       const scores = {}; for (const q of a.questions) if (q.type==='open' && v.get(q.id)!==null) scores[q.id] = Number(v.get(q.id));
@@ -379,9 +486,84 @@ function renderAttempt(a){
       toast('Тест завершён, результат сохранён.'); await loadAttempts();
     }
   });});
+  const wasOpen = box.childElementCount > 0;
   box.replaceChildren(form);
-  box.scrollIntoView({behavior:'smooth',block:'start'});
+  if (!wasOpen) box.scrollIntoView({behavior:'smooth',block:'start'});
 }
+
+/* ---------- students: tests by link, results, statistics ---------- */
+async function loadStudents(){
+  if (!S.doc) return;
+  const id = S.doc;
+  const [list, stats] = await Promise.all([api('/api/assignments?document_id='+id), api('/api/documents/'+id+'/stats')]);
+  if (id !== S.doc) return;
+  S.assignments = list;
+  renderAssignments(list);
+  renderStats(stats);
+}
+function studentLink(a){ return location.origin + '/s/' + a.token; }
+function renderAssignments(list){
+  const box = $('assignments');
+  if (!list.length){ box.replaceChildren(h('p',{class:'empty',text:'Ссылок пока нет. Примите вопросы в банке и создайте тест для студентов выше.'})); return; }
+  box.replaceChildren(...list.map(a => {
+    const link = h('input',{readonly:true,value:studentLink(a),onfocus:e=>e.target.select()});
+    const st = a.settings || {};
+    const descr = [a.question_count+' '+plural(a.question_count,'вопрос','вопроса','вопросов'), st.level ? 'уровень '+st.level : 'все уровни',
+      st.show_answers ? 'ответы показываются' : 'только баллы', LANG[st.ui_language]||''].filter(Boolean).join(' · ');
+    const finished = a.results.filter(r=>r.status==='finished');
+    const avg = finished.filter(r=>r.percent!=null);
+    const table = a.results.length ? h('table',{class:'results'},
+      h('thead',null,h('tr',null, h('th',null,'Студент'), h('th',null,'Статус'), h('th',null,'Тестовые'), h('th',null,'Итог'), h('th',null,'Когда'))),
+      h('tbody',null, ...a.results.map(r => h('tr',{class: r.status==='finished' ? 'clickable' : '', title: r.status==='finished' ? 'Открыть ответы' : '', onclick: r.status==='finished' ? async()=>{ try{ const data = await api('/api/assignment-attempts/'+r.id); renderAttempt(data, $('result-view')); $('result-view').scrollIntoView({behavior:'smooth'}); }catch(e){ toast(e.message,true);} } : null},
+        h('td',null,r.student_name||'—'),
+        h('td',null, r.status==='finished' ? (['pending','running'].includes(r.grading_status) ? 'проверяется ИИ' : 'завершён') : 'проходит'),
+        h('td',null, r.total ? `${r.correct} из ${r.total}` : '—'),
+        h('td',null, r.percent!=null ? h('b',{text:r.percent+'%'}) : '—'),
+        h('td',null, fmtDate(r.finished_at || r.created_at)))))) : h('p',{class:'hint',text:'Пока никто не прошёл. Отправьте ссылку студентам.'});
+    return h('div',{class:'panel grid'},
+      h('div',{class:'panel-head'}, h('div',null, h('h2',{text:a.title}), h('p',{class:'lead',text:descr})),
+        h('span',{class:'chip '+(a.is_open?'ok':'')}, a.is_open ? 'Приём открыт' : 'Приём закрыт')),
+      h('div',{class:'linkbox'}, link,
+        btn('Копировать ссылку','primary', async()=>{ try{ await navigator.clipboard.writeText(link.value); toast('Ссылка скопирована. Отправьте её студентам.'); } catch{ link.select(); toast('Скопируйте ссылку вручную: Ctrl+C.'); } }),
+        h('a',{class:'btn ghost',href:'/s/'+a.token,target:'_blank',rel:'noopener'},'Открыть как студент')),
+      h('div',{class:'funnel'}, h('span',null,h('b',{text:a.results.length}),'начали'), h('span',null,h('b',{text:finished.length}),'завершили'),
+        h('span',null,h('b',{text: avg.length ? Math.round(avg.reduce((x,r)=>x+r.percent,0)/avg.length)+'%' : '—'}),'средний итог')),
+      table,
+      h('div',{class:'actions'},
+        btn(a.is_open ? 'Закрыть приём ответов' : 'Открыть приём снова','', async()=>{ const r = await api('/api/assignments/'+a.id,{method:'PATCH',body:{is_open:!a.is_open}}); toast(r.message); await loadStudents(); }),
+        a.results.length ? h('a',{class:'btn ghost',href:'/api/assignments/'+a.id+'/results.csv',download:''},'Результаты в CSV') : null,
+        !a.results.length ? btn('Удалить','danger push', async()=>{ if(!await confirmAction('Удалить ссылку? Студенты больше не смогут её открыть.')) return; const r = await api('/api/assignments/'+a.id,{method:'DELETE'}); toast(r.message); await loadStudents(); }) : null));
+  }));
+}
+function renderStats(st){
+  const box = $('stats');
+  if (!st.attempts){ box.replaceChildren(h('p',{class:'empty',text:'Статистика появится после первых завершённых попыток.'})); return; }
+  const color = p => p>=85 ? 'var(--ok)' : p>=60 ? 'var(--sky)' : p>=40 ? 'var(--gold)' : 'var(--danger)';
+  const rows = items => items.map(t => h('div',{class:'barrow'}, h('span',{text:t.name}), h('div',{class:'track'}, h('i',{style:`width:${t.percent}%;background:${color(t.percent)}`})), h('b',{text:t.percent+'%'})));
+  const stat = (n,t) => h('div',{class:'stat'}, h('b',{text:n}), h('span',{text:t}));
+  box.replaceChildren(h('div',{class:'grid'},
+    h('div',{class:'stats'}, stat(st.attempts,'завершённых попыток'), stat(st.answered,'ответов оценено'), stat(st.percent!=null ? st.percent+'%' : '—','средний результат'), stat(st.weak_topics.length,'тем для повторения')),
+    st.weak_topics.length ? h('p',{class:'note',text:'Стоит повторить: '+st.weak_topics.map(t=>`${t.name} (${t.percent}%)`).join(', ')+'.'}) : h('p',{class:'hint',text:'Слабых тем не найдено: везде не ниже 60% (учитываются темы минимум с двумя ответами).'}),
+    h('h3',{text:'По темам'}), ...rows(st.topics),
+    h('h3',{text:'По уровням сложности'}), ...rows(st.levels.map(l=>({...l, name: l.name ? l.name+' · '+(levelOf(l.name)||{}).name : '—'}))),
+    st.students.length ? h('h3',{text:'По студентам'}) : null,
+    st.students.length ? h('table',{class:'results'}, h('thead',null,h('tr',null,h('th',null,'Студент'),h('th',null,'Попыток'),h('th',null,'Средний итог'),h('th',null,'Последняя'))),
+      h('tbody',null, ...st.students.map(s => h('tr',null, h('td',null,s.name), h('td',null,String(s.attempts)), h('td',null,s.percent+'%'), h('td',null,fmtDate(s.last)))))) : null,
+    st.timeline.length > 1 ? h('h3',{text:'Изменение результатов'}) : null,
+    st.timeline.length > 1 ? h('div',{class:'coverage',style:'height:110px'}, ...st.timeline.slice(-12).map(p => h('div',{class:'cov',title:p.student+' · '+fmtDate(p.finished_at)},
+      h('b',{text:p.percent+'%'}), h('div',{class:'col',style:`height:${Math.max(4, 70*p.percent/100)}px;background:${color(p.percent)}`}), h('small',{text:fmtDate(p.finished_at).split(',')[0]})))) : null));
+}
+$('assign-form').addEventListener('submit', e => { e.preventDefault(); busy(e.submitter, async ()=>{
+  if (!S.doc) throw Error('Сначала выберите материал слева.');
+  const body = { document_id:S.doc, title:$('as-title').value.trim(), topic_id: $('as-topic').value ? Number($('as-topic').value) : null,
+    count:Number($('as-count').value), level: $('as-level').value ? Number($('as-level').value) : null, type: segVal('as-type') || 'mixed',
+    language:'auto', show_answers: $('as-show').value==='1', ui_language:$('as-ui').value };
+  if (body.title.length < 2) throw Error('Укажите название теста.');
+  const a = await api('/api/assignments',{method:'POST',body});
+  toast(a.message || 'Ссылка создана. Скопируйте её и отправьте студентам.');
+  $('as-title').value = '';
+  await loadStudents();
+});});
 
 /* ---------- upload wiring ---------- */
 $('file').addEventListener('change', e => upload(e.target.files[0]));
@@ -398,15 +580,16 @@ async function poll(){
     await loadDocuments();
     if (S.doc){
       if (S.detail && (S.detail.status==='processing' || S.detail.topic_status==='processing')) await loadDetail();
-      const wasActive = S.jobs.some(j=>['queued','running'].includes(j.status));
+      const wasActive = S.jobs.some(j=>['queued','running','waiting'].includes(j.status));
       if (wasActive || S.view==='generate') await loadJobs();
+      if (S.view==='students' && !(S.poll5 = ((S.poll5||0)+1) % 4)) await loadStudents();
     }
   } catch(e){ /* тихо: сервер мог перезапускаться */ }
   finally{ S.polling = false; }
 }
 async function init(){
   buildStatic();
-  try { await Promise.all([loadConfig(), loadDocuments()]); } catch(e){ toast(e.message,true); }
+  try { await Promise.all([loadConfig(), loadDocuments(), loadStorage()]); } catch(e){ toast(e.message,true); }
   setInterval(poll, 3000);
 }
 init();
