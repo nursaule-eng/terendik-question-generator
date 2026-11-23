@@ -160,3 +160,5 @@ table.results th{text-transform:none;letter-spacing:0;font-size:13px;font-weight
 @media (max-width:900px){.hero{border-radius:22px;padding:20px 18px 0}.hero::after{display:none}.shelf{border-bottom:1px solid var(--line)}.welcome{padding:30px 22px 30px}}
 .panel .grid+.grid,.panel .grid+.actions,.panel .grid+.field,.panel .field+.actions{margin-top:16px}
 .grid{row-gap:16px}
+.src-head .hint{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.src-head .hint:hover{-webkit-line-clamp:unset}
