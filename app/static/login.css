@@ -1,21 +1,28 @@
-@font-face{font-family:"Inter";font-display:swap;font-weight:100 900;src:url(/static/fonts/inter-cyrillic-wght-normal.woff2) format("woff2-variations");unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
-@font-face{font-family:"Inter";font-display:swap;font-weight:100 900;src:url(/static/fonts/inter-cyrillic-ext-wght-normal.woff2) format("woff2-variations");unicode-range:U+0460-052F}
-@font-face{font-family:"Inter";font-display:swap;font-weight:100 900;src:url(/static/fonts/inter-latin-wght-normal.woff2) format("woff2-variations");unicode-range:U+0000-00FF,U+2000-206F}
-:root{font-family:"Inter",system-ui,sans-serif;color:#18211f;background:#f7f8f7;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:400;src:url(/static/fonts/roboto-cyrillic-ext-400-normal.woff2) format("woff2");unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:400;src:url(/static/fonts/roboto-cyrillic-400-normal.woff2) format("woff2");unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:400;src:url(/static/fonts/roboto-latin-ext-400-normal.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:400;src:url(/static/fonts/roboto-latin-400-normal.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:500;src:url(/static/fonts/roboto-cyrillic-ext-500-normal.woff2) format("woff2");unicode-range:U+0460-052F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:500;src:url(/static/fonts/roboto-cyrillic-500-normal.woff2) format("woff2");unicode-range:U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:500;src:url(/static/fonts/roboto-latin-ext-500-normal.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:"Roboto";font-style:normal;font-display:swap;font-weight:500;src:url(/static/fonts/roboto-latin-500-normal.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+:root{font-family:"Roboto",system-ui,sans-serif;color:#191c1a;background:#f6faf5;font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
 *{box-sizing:border-box}
 body{margin:0;min-height:100svh;display:grid;place-items:center;padding:24px}
-main{width:100%;max-width:440px;background:#fff;border:1px solid #e5e8e6;border-radius:14px;padding:36px 34px;box-shadow:0 1px 2px rgba(24,33,31,.04),0 12px 32px rgba(24,33,31,.06)}
-.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;margin:0 0 22px;color:#18211f}
+main{width:100%;max-width:440px;background:#fff;border:1px solid #e5e8e6;border-radius:28px;padding:40px 34px 36px;position:relative;overflow:hidden;box-shadow:0 1px 2px rgba(24,33,31,.04),0 12px 32px rgba(24,33,31,.06)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px;margin:0 0 22px;color:#191c1a}
 .brand::before{content:"";width:22px;height:20px;background:linear-gradient(to top,#bfe6de 0 30%,transparent 30%) 0 100%/4px 100% no-repeat,linear-gradient(to top,#7dcdbd 0 45%,transparent 45%) 6px 100%/4px 100% no-repeat,linear-gradient(to top,#35ac96 0 65%,transparent 65%) 12px 100%/4px 100% no-repeat,linear-gradient(to top,#0d4a41 0 100%,transparent 100%) 18px 100%/4px 100% no-repeat}
 h1{font-size:22px;line-height:1.25;letter-spacing:-.02em;margin:0 0 8px;font-weight:650}
 p{color:#67726e;margin:0}
 form{display:grid;gap:8px;margin-top:24px}
 label{font-weight:550;font-size:13px}
-input{padding:10px 12px;border:1px solid #d3d8d5;border-radius:8px;font:inherit;width:100%}
-input:focus{outline:none;border-color:#0f9d8a;box-shadow:0 0 0 3px #e8f5f2}
-button{margin-top:8px;border:0;background:#0f9d8a;color:#fff;border-radius:9px;font:inherit;font-weight:600;padding:11px;cursor:pointer}
-button:hover{background:#0b7a6b}
-button:focus-visible{outline:2px solid #0f9d8a;outline-offset:3px}
+input{padding:10px 12px;border:1px solid #d3d8d5;border-radius:12px;font:inherit;width:100%}
+input:focus{outline:none;border-color:#146c43;box-shadow:0 0 0 3px #ddf3e3}
+button{margin-top:8px;border:0;background:#146c43;color:#fff;border-radius:999px;font:inherit;font-weight:600;padding:11px;cursor:pointer}
+button:hover{background:#0d5433}
+button:focus-visible{outline:2px solid #146c43;outline-offset:3px}
 .error{background:#fbece9;color:#c2412f;padding:10px 12px;border-radius:8px;margin-top:14px;font-size:14px}
 .notice{margin-top:22px;border-top:1px solid #e5e8e6;padding-top:16px;font-size:12.5px}
 @media(max-width:480px){main{padding:26px 22px}}
+main::before{content:"";position:absolute;left:0;right:0;top:0;height:14px;background:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2264%22%20height%3D%2228%22%20viewBox%3D%220%200%2064%2028%22%20fill%3D%22none%22%20stroke%3D%22%23C08A2B%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M32%2026V14C32%206%2022%203%2018%208C15%2012%2019%2016%2022%2013C24%2011%2022%209%2020%2010.5M32%2014C32%206%2042%203%2046%208C49%2012%2045%2016%2042%2013C40%2011%2042%209%2044%2010.5%22/%3E%3Cpath%20d%3D%22M28%2026h8%22/%3E%3Cpath%20d%3D%22M0%2018l4-4%204%204-4%204zM56%2018l4-4%204%204-4%204z%22%20stroke-width%3D%221.2%22/%3E%3C/svg%3E") repeat-x 0 0/32px 14px;opacity:.5}
+.brand::before{background:linear-gradient(to top,#bde8cb 0 30%,transparent 30%) 0 100%/4px 100% no-repeat,linear-gradient(to top,#86d1a2 0 45%,transparent 45%) 6px 100%/4px 100% no-repeat,linear-gradient(to top,#43ae72 0 65%,transparent 65%) 12px 100%/4px 100% no-repeat,linear-gradient(to top,#0e4d2f 0 100%,transparent 100%) 18px 100%/4px 100% no-repeat}
