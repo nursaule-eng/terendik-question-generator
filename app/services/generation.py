@@ -293,7 +293,8 @@ def make_question(llm, params, job_id, level, kind, topic, context, existing, ta
     payload['job_id'] = job_id
     with connect() as db:
         db.execute('BEGIN IMMEDIATE')
-        current_texts = [json.loads(r[0])['text'] for r in db.execute('SELECT payload FROM questions WHERE document_id=?', (params.document_id,))]
+        current_texts = [json.loads(r[0])['text'] for r in db.execute(
+            "SELECT payload FROM questions WHERE document_id=? AND auto_status<>'failed'", (params.document_id,))]
         if status == 'passed' and duplicate(payload['text'], current_texts):
             status = 'failed'
             payload['validation'].update(passed=False, reasons=['Похожий вопрос появился в банке во время генерации.'])
@@ -341,7 +342,9 @@ def check_candidate(llm, params, candidate, kind, level, topic, context, target_
         if candidate.type != kind:
             raise ValueError('Модель вернула другой тип вопроса.')
         with connect() as db:
-            existing_questions = [json.loads(r[0]) for r in db.execute('SELECT payload FROM questions WHERE document_id=?', (params.document_id,))]
+            # Отклонённые вопросы не входят в банк и тест, поэтому повтором считаем только совпадение с прошедшими проверку.
+            existing_questions = [json.loads(r[0]) for r in db.execute(
+                "SELECT payload FROM questions WHERE document_id=? AND auto_status<>'failed'", (params.document_id,))]
         if duplicate(candidate.text, [q['text'] for q in existing_questions]):
             raise ValueError('Обнаружен похожий вопрос в документе.')
         set_stage(f'Проверяется вопрос уровня {level}.')
