@@ -266,6 +266,11 @@ def make_question(llm, params, job_id, level, kind, topic, context, existing, ta
     if topic:
         candidate = candidate.model_copy(update={'topic': topic['name']})
     payload, status = check_candidate(llm, params, candidate, kind, level, topic, context, target_language, set_stage)
+    if status == 'failed' and repairable(payload['validation'].get('reasons')):
+        repaired = repair_question(llm, params, candidate, payload['validation']['reasons'], kind, level, topic,
+                                   context, target_language, set_stage)
+        if repaired and repaired[1] == 'passed':
+            payload, status = repaired
     if status == 'passed' and payload.get('level_mismatch') and payload['validation'].get('passed'):
         # One focused revision: ask the author to adjust the cognitive demand to the requested level.
         set_stage(f'Уточняется сложность вопроса (нужен уровень {level}, проверка дала {payload["checked_level"]}).')
@@ -295,6 +300,38 @@ def make_question(llm, params, job_id, level, kind, topic, context, existing, ta
         db.execute('INSERT INTO questions(id,document_id,payload,auto_status,job_id) VALUES(?,?,?,?,?)',
                    (uuid.uuid4().hex, params.document_id, dumps(payload), status, job_id))
     return status, payload
+
+
+REPAIR_INSTRUCTION = (
+    'Это исправление вопроса, который не прошёл проверку по документу. В problems перечислены найденные ошибки. '
+    'Исправь вопрос, ответ, варианты и объяснение так, чтобы всё следовало ТОЛЬКО из fragments, без общих знаний. '
+    'Поле quote скопируй дословно из text фрагмента (непрерывный отрывок 8–30 слов). '
+    'Сохрани тему, тип вопроса, уровень сложности и язык. Если по материалу исправить нельзя, верни questions=[] и объясни в reason. ')
+
+NOT_REPAIRABLE = ('повтор', 'похож', 'Похож')
+
+
+def repairable(reasons):
+    return bool(reasons) and not any(marker in r for r in reasons for marker in NOT_REPAIRABLE)
+
+
+def repair_question(llm, params, candidate, reasons, kind, level, topic, context, target_language, set_stage):
+    """One automatic repair + full re-check. Returns (payload, status) or None if the model gives up."""
+    set_stage(f'Исправляется вопрос уровня {level} и проверяется заново.')
+    request = {'count': 1, 'level': level, 'cognitive_task': COGNITIVE_TASKS[level], 'type': kind,
+               'target_language': LANGUAGES[target_language], 'topic': topic['name'] if topic else 'Весь материал',
+               'previous_question': candidate.model_dump() if hasattr(candidate, 'model_dump') else candidate,
+               'problems': reasons[:8],
+               'fragments': [{'fragment_id': f['id'], 'text': ' '.join(f['text'].split())} for f in context]}
+    response = llm.json(REPAIR_INSTRUCTION + GENERATE_INSTRUCTION, request, Batch)
+    if not response.questions:
+        return None
+    fixed = response.questions[0]
+    if topic:
+        fixed = fixed.model_copy(update={'topic': topic['name']})
+    payload, status = check_candidate(llm, params, fixed, kind, level, topic, context, target_language, set_stage)
+    payload['auto_fixed'] = {'reasons': reasons[:8], 'passed': status == 'passed'}
+    return payload, status
 
 
 def check_candidate(llm, params, candidate, kind, level, topic, context, target_language, set_stage):

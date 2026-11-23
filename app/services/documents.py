@@ -87,23 +87,23 @@ def _extract(path: Path, extension: str):
 
 
 def page_pieces(page):
-    """Text pieces with positions. A visual line is split where a wide horizontal gap
-    separates two columns."""
+    """Text pieces with positions. Words come from PyMuPDF's word splitter (it restores
+    spaces that justified PDFs encode only as positioning); a visual line is split where
+    a wide horizontal gap separates two columns."""
+    lines = {}
+    for x0, y0, x1, y1, word, block, line, _ in page.get_text('words', sort=True):
+        lines.setdefault((block, line), []).append((x0, y0, x1, word))
     pieces = []
-    for block in page.get_text('dict', sort=True)['blocks']:
-        for line in block.get('lines', []):
-            current = None
-            for span in line['spans']:
-                text = span['text']
-                if not text.strip():
-                    continue
-                x0, y0, x1, _ = span['bbox']
-                if current and x0 - current['x1'] < 30:
-                    current['text'] += text
-                    current['x1'] = x1
-                else:
-                    current = {'x0': x0, 'y0': y0, 'x1': x1, 'text': text}
-                    pieces.append(current)
+    for words in lines.values():
+        words.sort(key=lambda w: w[0])
+        current = None
+        for x0, y0, x1, word in words:
+            if current and x0 - current['x1'] < 30:
+                current['text'] += ' ' + word
+                current['x1'] = x1
+            else:
+                current = {'x0': x0, 'y0': y0, 'x1': x1, 'text': word}
+                pieces.append(current)
     return pieces
 
 

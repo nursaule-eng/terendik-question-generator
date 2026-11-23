@@ -110,17 +110,46 @@ def dehyphen(text):
     return re.sub(r'(\w)[-\u00ad]\s*\n\s*(\w)', r'\1\2', text)
 
 
-def find_quote(quote, text):
-    """See _find_quote; additionally accepts «part … part» quotes when every part is in the source."""
+MATCH_LABELS = {'exact': 'дословное совпадение', 'normalized': 'совпадение без учёта пунктуации',
+                'fuzzy': 'почти дословное совпадение', 'parts': 'совпадение по частям', 'partial': 'совпадение части цитаты'}
+
+
+def locate_quote(quote, text):
+    """Return (verbatim source span, match kind) or (None, None).
+    Kinds: exact, normalized, fuzzy, parts, partial — the last three need a human look."""
+    if whitespace(quote) in whitespace(text):
+        return quote, 'exact'
     found = _find_quote(quote, text)
     if found is not None:
-        return found
+        same = normalized(found) == normalized(dehyphen(quote))
+        return found, 'normalized' if same else 'fuzzy'
     parts = [p.strip(' "«»“”') for p in re.split(r'\.\.\.|…', quote) if len(normalized(p).split()) >= 3]
     if len(parts) >= 2:
         spans = [_find_quote(part, text) for part in parts]
         if all(spans):
-            return ' … '.join(spans)
-    return longest_run(quote, text)
+            return ' … '.join(spans), 'parts'
+    run = longest_run(quote, text)
+    return (run, 'partial') if run else (None, None)
+
+
+def highlight_range(span, text):
+    """[start, end) of `span` inside `text`, ignoring whitespace differences; None if absent."""
+    first = span.split(' … ')[0]
+    words = first.split()
+    if not words:
+        return None
+    pattern = r'\s+'.join(re.escape(w) for w in words)
+    found = re.search(pattern, text)
+    if not found:
+        found = re.search(pattern, dehyphen(text))
+        if not found:
+            return None
+    return [found.start(), found.end()]
+
+
+def find_quote(quote, text):
+    """Verbatim source span supporting `quote`, or None (see locate_quote)."""
+    return locate_quote(quote, text)[0]
 
 
 def longest_run(quote, text, min_words=8, min_share=.5):
@@ -199,10 +228,11 @@ def validate_sources(candidate, fragments, document_id):
         fragment = by_id.get(source.fragment_id)
         if fragment is None:
             raise ValueError('Источник отсутствует, не передан модели или принадлежит другому документу.')
-        verbatim = find_quote(source.quote, fragment['text'])
+        verbatim, match = locate_quote(source.quote, fragment['text'])
         if verbatim is None:
             raise ValueError('Подтверждающая цитата не найдена в указанном фрагменте.')
-        enriched.append({**source.model_dump(), 'quote': verbatim, 'location': location(fragment)})
+        enriched.append({**source.model_dump(), 'quote': verbatim, 'match': match, 'location': location(fragment),
+                         'page': fragment.get('page_start')})
     return enriched
 
 

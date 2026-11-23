@@ -19,14 +19,16 @@ def to_csv(questions):
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=';')
     writer.writerow(['№', 'Уровень', 'Тип', 'Тема', 'Язык', 'Вопрос', 'Вариант A', 'Вариант B', 'Вариант C', 'Вариант D',
-                     'Правильный ответ', 'Эталонный ответ', 'Объяснение', 'Источник', 'Цитата', 'AI-проверка', 'Решение преподавателя'])
+                     'Правильный ответ', 'Эталонный ответ', 'Объяснение', 'Источник', 'Цитата', 'Проверка по документу', 'Решение преподавателя'])
     for n, q in enumerate(questions, 1):
         options = (q.get('options') or []) + [''] * 4
         correct = LETTERS[q['correct_index']] if q['type'] == 'mcq' and q.get('correct_index') is not None else ''
         source = (q.get('sources') or [{}])[0]
         writer.writerow([n, level_of(q) or '', TYPE_NAMES.get(q['type'], q['type']), q.get('topic', ''), q.get('language', ''),
                          q['text'], *options[:4], correct, q.get('reference_answer', ''), q.get('explanation', ''),
-                         source.get('location', ''), source.get('quote', ''), q.get('auto_status', ''), q.get('review_status', '')])
+                         source.get('location', ''), source.get('quote', ''),
+                         {'confirmed': 'Подтверждён', 'review': 'Требует проверки', 'rejected': 'Не подтверждён'}.get(q.get('verification'), q.get('auto_status', '')),
+                         q.get('review_status', '')])
     # BOM so that Excel opens Cyrillic/Kazakh text correctly.
     return ('﻿' + buffer.getvalue()).encode('utf-8')
 
