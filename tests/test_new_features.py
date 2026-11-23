@@ -434,3 +434,16 @@ def test_generation_repairs_a_failed_question(client, doc, candidate, monkeypatc
     assert job['created'] == 1
     q = client.get('/api/questions', params={'document_id': doc}).json()[0]
     assert q['text'].startswith('Исправленный') and q['auto_fixed']['passed'] and q['verification'] == 'confirmed'
+
+
+def test_rejected_question_does_not_block_a_new_one(client, doc, candidate, monkeypatch):
+    from app.database import connect
+    model_env(monkeypatch)
+    no_sleep(monkeypatch)
+    monkeypatch.setattr(LLM, 'json', provider(candidate, variants=False))
+    client.post('/api/generate', json={'document_id': doc, 'count': 1, 'type': 'mcq', 'level': 1})
+    assert client.get("/api/jobs", params={"document_id": doc}).json()[0]["created"] == 1
+    with connect() as db:
+        db.execute("UPDATE questions SET auto_status='failed' WHERE document_id=?", (doc,))
+    client.post('/api/generate', json={'document_id': doc, 'count': 1, 'type': 'mcq', 'level': 1})
+    assert client.get("/api/jobs", params={"document_id": doc}).json()[0]["created"] == 1
