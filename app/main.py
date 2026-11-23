@@ -171,10 +171,12 @@ async def upload(file: UploadFile, background_tasks: BackgroundTasks):
             db.execute('BEGIN IMMEDIATE')
             existing = db.execute('SELECT id,status,name FROM documents WHERE file_hash=? AND deleted_at IS NULL ORDER BY rowid LIMIT 1', (digest.hexdigest(),)).fetchone()
             if existing:
+                store.save_file(db, existing['id'], path.read_bytes())  # older uploads get their original attached
                 path.unlink(missing_ok=True)
                 return JSONResponse({'id': existing['id'], 'status': existing['status'], 'already_uploaded': True,
                                      'message': 'Этот файл уже загружен. Открыт существующий документ: ' + existing['name']}, status_code=200)
             db.execute("INSERT INTO documents(id,name,format,status,file_hash) VALUES(?,?,?,'processing',?)", (doc_id, name, extension, digest.hexdigest()))
+            store.save_file(db, doc_id, path.read_bytes())
     except Exception:
         path.unlink(missing_ok=True)
         raise
@@ -339,14 +341,17 @@ def bank_status(doc_id: str):
 
 
 @app.get('/api/questions')
-def questions(document_id: str, status: str | None = None, topic: str | None = None, level: int | None = None, type: str | None = None, auto_status: str | None = None):
+def questions(document_id: str, status: str | None = None, topic: str | None = None, level: int | None = None, type: str | None = None, auto_status: str | None = None, verification: str | None = None):
     with connect() as db:
         require_document(db, document_id)
         items = [question(r) for r in db.execute('SELECT * FROM questions WHERE document_id=? ORDER BY created_at DESC,rowid DESC', (document_id,))]
     annotate_duplicates(items)
+    for q in items:
+        q['verification'], q['verification_notes'] = store.verification(q)
     return [q for q in items if (not status or q['review_status'] == status) and (not topic or q['topic'] == topic)
             and (not level or q['checked_level'] == level) and (not type or q['type'] == type)
-            and (not auto_status or q['auto_status'] == auto_status)]
+            and (not auto_status or q['auto_status'] == auto_status)
+            and (not verification or q['verification'] == verification)]
 
 
 @app.put('/api/questions/{qid}')
@@ -397,6 +402,134 @@ def recheck(qid: str):
         if not result.rowcount:
             raise HTTPException(409, 'Вопрос был изменён во время проверки. Повторите проверку.')
     return {'message': 'AI-проверка завершена. Решение принимает преподаватель.', 'auto_status': status}
+
+
+@app.post('/api/questions/{qid}/repair')
+def repair(qid: str):
+    """Ask the model to fix a question the document does not confirm, then re-run every check."""
+    from app.services.generation import repair_question
+    from app.services.retrieval import retrieve
+    if not configuration()['configured']:
+        raise ModelError('Модель не настроена.')
+    with connect() as db:
+        row = require_question(db, qid)
+        old = question(row)
+        doc = require_document(db, row['document_id'])
+        fragments = [dict(r) for r in db.execute('SELECT * FROM fragments WHERE document_id=? ORDER BY ordinal', (row['document_id'],))]
+        topic = next((t for t in read_topics(db, row['document_id']) if t['name'] == old.get('topic')), None)
+        revision = row['revision']
+    reasons = list(old.get('validation', {}).get('reasons') or []) or ['Вопрос не подтверждён документом.']
+    if any('повтор' in r or 'похож' in r.casefold() for r in reasons):
+        raise HTTPException(409, 'Это повтор другого вопроса: исправление не поможет, удалите или отклоните его.')
+    own = {s['fragment_id'] for s in old.get('sources') or []}
+    context = [f for f in fragments if f['id'] in own] + [f for f in retrieve(fragments, topic) if f['id'] not in own]
+    candidate = Candidate.model_validate({k: old[k] for k in Candidate.model_fields if k != 'sources'} |
+                                         {'sources': [{'fragment_id': s['fragment_id'], 'quote': s['quote']} for s in old.get('sources') or []] or
+                                          [{'fragment_id': context[0]['id'], 'quote': context[0]['text'][:80]}]})
+    level = old.get('requested_level') or old.get('checked_level') or 1
+    params = Generate(document_id=row['document_id'], count=1, level=level, type=old['type'])
+    result = repair_question(LLM(), params, candidate, reasons, old['type'], level, topic, context[:7],
+                             old.get('language') or doc['language'], lambda message: None)
+    if result is None:
+        raise HTTPException(422, 'Модель не смогла исправить вопрос по материалу документа. Удалите его или отредактируйте вручную.')
+    payload, status = result
+    if status != 'passed':
+        return {'message': 'Исправленный вариант тоже не подтвердился документом. Вопрос оставлен как есть.', 'auto_status': row['auto_status']}
+    from app.services.options import shuffle_options
+    payload = shuffle_options(payload)
+    with connect() as db:
+        updated = db.execute("UPDATE questions SET payload=?,auto_status='passed',review_status='pending',revision=revision+1 WHERE id=? AND revision=?",
+                             (dumps(payload), qid, revision))
+        if not updated.rowcount:
+            raise HTTPException(409, 'Вопрос был изменён во время исправления. Обновите банк.')
+    return {'message': 'Вопрос исправлен и заново подтверждён документом. Проверьте и примите его.', 'auto_status': 'passed'}
+
+
+@app.get('/api/questions/{qid}/source')
+def question_source(qid: str):
+    """Everything needed to show the question's evidence inside the document."""
+    from app.services.validation import locate_quote
+    with connect() as db:
+        row = require_question(db, qid)
+        q = question(row)
+        doc = require_document(db, row['document_id'])
+        has_file = bool(db.execute('SELECT 1 FROM files WHERE document_id=?', (row['document_id'],)).fetchone())
+        by_id = {r['id']: dict(r) for r in db.execute('SELECT * FROM fragments WHERE document_id=? ORDER BY ordinal', (row['document_id'],))}
+    ordered = sorted(by_id.values(), key=lambda f: f['ordinal'])
+    sources = []
+    for source in q.get('sources') or []:
+        fragment = by_id.get(source.get('fragment_id'))
+        if not fragment:
+            sources.append({**source, 'missing': True})
+            continue
+        index = ordered.index(fragment)
+        from app.services.validation import dehyphen
+        text = dehyphen(fragment['text'])
+        span, match = locate_quote(source['quote'], text)
+        highlight = None
+        if span:
+            # Character offsets of the supporting words inside the fragment, for <mark>.
+            from app.services.validation import highlight_range
+            highlight = highlight_range(span, text)
+        sources.append({**source, 'match': source.get('match') or match, 'page': fragment['page_start'],
+                        'fragment_text': text, 'highlight': highlight,
+                        'before': ordered[index - 1]['text'][-600:] if index > 0 else '',
+                        'after': ordered[index + 1]['text'][:600] if index + 1 < len(ordered) else ''})
+    return {'question_id': qid, 'text': q['text'], 'document': {'id': doc['id'], 'name': doc['name'], 'format': doc['format']},
+            'pdf_pages': has_file and doc['format'] == 'pdf', 'verification': q['verification'],
+            'verification_notes': q['verification_notes'], 'sources': sources}
+
+
+@app.get('/api/documents/{doc_id}/pages/{page}.png')
+def page_image(doc_id: str, page: int, q: str = ''):
+    """A PDF page rendered with the supporting quote highlighted."""
+    import pymupdf
+    with connect() as db:
+        doc = require_document(db, doc_id)
+        content = store.load_file(db, doc_id)
+    if doc['format'] != 'pdf' or content is None:
+        raise HTTPException(404, 'Для этого документа нет исходного PDF. Загрузите файл ещё раз, чтобы видеть страницы.')
+    pdf = pymupdf.open(stream=content, filetype='pdf')
+    if page < 1 or page > pdf.page_count:
+        raise HTTPException(404, 'Такой страницы нет.')
+    sheet = pdf[page - 1]
+    for rect in quote_rects(sheet, q):
+        annot = sheet.add_highlight_annot(rect)
+        annot.set_colors(stroke=(1.0, 0.85, 0.25))
+        annot.update()
+    image = sheet.get_pixmap(dpi=110, annots=True).tobytes('png')
+    return Response(image, media_type='image/png', headers={'Cache-Control': 'private, max-age=600'})
+
+
+def quote_rects(sheet, quote):
+    """Find the quote on the page: whole phrase first, then overlapping word windows
+    (slides break lines), so most of the supporting text is highlighted."""
+    quote = ' '.join((quote or '').replace('…', ' ').split())
+    if not quote:
+        return []
+    found = sheet.search_for(quote, quads=False)
+    if found:
+        return found
+    words = quote.split()
+    rects = []
+    for size in (6, 4, 3):
+        for start in range(0, max(1, len(words) - size + 1), max(1, size // 2)):
+            rects += sheet.search_for(' '.join(words[start:start + size]))
+        if rects:
+            return rects
+    return rects
+
+
+@app.get('/api/documents/{doc_id}/file')
+def original_file(doc_id: str):
+    with connect() as db:
+        doc = require_document(db, doc_id)
+        content = store.load_file(db, doc_id)
+    if content is None:
+        raise HTTPException(404, 'Исходный файл не сохранён. Загрузите его ещё раз.')
+    media = {'pdf': 'application/pdf', 'txt': 'text/plain; charset=utf-8',
+             'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}[doc['format']]
+    return download(content, media, doc['name'])
 
 
 @app.post('/api/questions/{qid}/review')

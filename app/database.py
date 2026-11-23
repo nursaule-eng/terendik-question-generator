@@ -200,6 +200,8 @@ CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, document_id TEXT NOT NULL REFERENCES documents(id),
   title TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{}', snapshot TEXT NOT NULL,
   is_open INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS files (
+  document_id TEXT PRIMARY KEY REFERENCES documents(id), content BLOB NOT NULL, size INTEGER NOT NULL);
 '''
 
 PG_SCHEMA = f'''
@@ -228,7 +230,9 @@ CREATE TABLE IF NOT EXISTS attempts (
 CREATE TABLE IF NOT EXISTS assignments (
   id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, document_id TEXT NOT NULL REFERENCES documents(id),
   title TEXT NOT NULL, settings TEXT NOT NULL DEFAULT '{{}}', snapshot TEXT NOT NULL,
-  is_open INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT ({PG_NOW}))
+  is_open INTEGER NOT NULL DEFAULT 1, created_at TEXT DEFAULT ({PG_NOW}));
+CREATE TABLE IF NOT EXISTS files (
+  document_id TEXT PRIMARY KEY REFERENCES documents(id), content BYTEA NOT NULL, size INTEGER NOT NULL)
 '''
 
 # Columns added after the first release. (table, column, declaration)
@@ -291,13 +295,48 @@ def init_db():
         db.execute("UPDATE jobs SET status='queued', stage='Сервер перезапускался. Генерация продолжится автоматически.' WHERE status='running'")
 
 
+def save_file(db, document_id, content):
+    """Keep the original upload in the database: free hosting disks are wiped on restart,
+    and the source viewer needs the real PDF pages."""
+    if not db.execute('SELECT document_id FROM files WHERE document_id=?', (document_id,)).fetchone():
+        db.execute('INSERT INTO files(document_id,content,size) VALUES(?,?,?)', (document_id, content, len(content)))
+
+
+def load_file(db, document_id):
+    row = db.execute('SELECT content FROM files WHERE document_id=?', (document_id,)).fetchone()
+    return bytes(row[0]) if row else None
+
+
 def dumps(value):
     return json.dumps(value, ensure_ascii=False)
+
+
+REVIEW_MATCHES = ('fuzzy', 'parts', 'partial')
+
+
+def verification(q):
+    """Source-verification status shown to the teacher:
+    confirmed — every check passed and every quote is found in the document;
+    review — passed, but something needs a human look (level, inexact quote, edited, possible repeat);
+    rejected — the document does not confirm the question or answer: never used in tests."""
+    if q.get('auto_status') == 'failed':
+        return 'rejected', list(q.get('validation', {}).get('reasons') or [])[:6]
+    notes = []
+    if q.get('auto_status') != 'passed':
+        notes.append('Вопрос изменён после проверки — запустите проверку ещё раз.')
+    if q.get('level_mismatch'):
+        notes.append(f"Уровень: запрошен {q.get('requested_level')}, проверка определила {q.get('checked_level')}.")
+    if any(s.get('match') in REVIEW_MATCHES for s in q.get('sources') or []):
+        notes.append('Цитата найдена в документе не дословно — сверьте с источником.')
+    if q.get('possible_duplicate'):
+        notes.append('Похож на другой вопрос банка.')
+    return ('review' if notes else 'confirmed'), notes
 
 
 def question(row):
     result = json.loads(row['payload'])
     result.update({k: row[k] for k in ('id', 'document_id', 'auto_status', 'review_status', 'revision', 'created_at')})
+    result['verification'], result['verification_notes'] = verification(result)
     return result
 
 
