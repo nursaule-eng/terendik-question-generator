@@ -205,7 +205,7 @@ def test_backup_roundtrip(client, doc, saved):
     dump = client.get('/api/backup').content
     # Simulate a fresh server.
     with connect() as db:
-        for table in ('attempts', 'assignments', 'questions', 'topics', 'jobs', 'fragments', 'documents'):
+        for table in ('files', 'attempts', 'assignments', 'questions', 'topics', 'jobs', 'fragments', 'documents'):
             db.execute(f'DELETE FROM {table}')
     result = client.post('/api/backup', files={'file': ('backup.json', dump, 'application/json')}).json()
     assert result['added'] == 1
@@ -363,3 +363,74 @@ def test_student_adaptive_link(client, doc, candidate):
     assert r['finished'] and r['result']['correct'] == 4
     listed = client.get('/api/assignments', params={'document_id': doc}).json()[0]
     assert listed['results'][0]['estimate'] >= 2.5
+
+
+# ------------------------------------------------------------------ source viewer and verification statuses
+def make_pdf_bytes():
+    import pymupdf
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((60, 100), 'Algorithm is an ordered list of steps.', fontname='helv')
+    page.insert_text((60, 130), 'A program is an algorithm written for a computer.', fontname='helv')
+    return doc.tobytes()
+
+
+def test_source_viewer_pdf_page_and_highlight(client, candidate, monkeypatch):
+    response = client.post('/api/documents', files={'file': ('lesson.pdf', make_pdf_bytes(), 'application/pdf')})
+    doc = response.json()['id']
+    with connect() as db:
+        fragment = db.execute('SELECT * FROM fragments WHERE document_id=?', (doc,)).fetchone()
+        payload = {**candidate, 'text': 'What is an algorithm in this lesson?', 'language': 'en', 'requested_level': 1, 'checked_level': 1,
+                   'sources': [{'fragment_id': fragment['id'], 'quote': 'Algorithm is an ordered list of steps.', 'match': 'exact', 'location': 'p1'}],
+                   'validation': {'passed': True, 'reasons': []}}
+        db.execute("INSERT INTO questions(id,document_id,payload,auto_status) VALUES('src1',?,?,'passed')", (doc, dumps(payload)))
+    data = client.get('/api/questions/src1/source').json()
+    assert data['pdf_pages'] and data['verification'] == 'confirmed'
+    source = data['sources'][0]
+    assert source['page'] == 1
+    start, end = source['highlight']
+    assert source['fragment_text'][start:end] == 'Algorithm is an ordered list of steps.'
+    image = client.get(f'/api/documents/{doc}/pages/1.png', params={'q': source['quote']})
+    assert image.status_code == 200 and image.content[:4] == b'\x89PNG'
+    assert client.get(f'/api/documents/{doc}/pages/9.png').status_code == 404
+    assert client.get(f'/api/documents/{doc}/file').content[:4] == b'%PDF'
+
+
+def test_verification_statuses_and_test_exclusion(client, doc, saved, candidate):
+    items = {q['id']: q for q in client.get('/api/questions', params={'document_id': doc}).json()}
+    assert items[saved]['verification'] == 'confirmed'
+    with connect() as db:
+        bad = {**candidate, 'text': 'Сколько лет исполнителю в этом уроке?', 'validation': {'passed': False, 'reasons': ['Ответ не подтверждается источником.']}}
+        db.execute("INSERT INTO questions(id,document_id,payload,auto_status,review_status) VALUES('bad1',?,?,'failed','pending')", (doc, dumps(bad)))
+        fuzzy = {**candidate, 'text': 'Какой порядок выполнения команд у исполнителя по условию?', 'requested_level': 1, 'checked_level': 1,
+                 'sources': [{**candidate['sources'][0], 'match': 'partial'}], 'validation': {'passed': True, 'reasons': []}}
+        db.execute("INSERT INTO questions(id,document_id,payload,auto_status,review_status) VALUES('fz1',?,?,'passed','pending')", (doc, dumps(fuzzy)))
+    by = {q['id']: q for q in client.get('/api/questions', params={'document_id': doc}).json()}
+    assert by['bad1']['verification'] == 'rejected' and by['fz1']['verification'] == 'review'
+    assert [q['id'] for q in client.get('/api/questions', params={'document_id': doc, 'verification': 'rejected'}).json()] == ['bad1']
+    # an unconfirmed question cannot be accepted and so never reaches a test
+    assert client.post('/api/questions/bad1/review', json={'status': 'accepted', 'revision': 1}).status_code == 409
+    attempt = client.post('/api/attempts', json={'document_id': doc, 'count': 10}).json()
+    assert 'bad1' not in [q['id'] for q in attempt['questions']]
+
+
+def test_generation_repairs_a_failed_question(client, doc, candidate, monkeypatch):
+    model_env(monkeypatch)
+    state = {'batch': 0}
+
+    def fake(self, instruction, data, schema):
+        if schema is Batch:
+            state['batch'] += 1
+            if 'previous_question' in data and 'problems' in data:
+                return Batch(questions=[candidate | {'text': 'Исправленный вопрос: что такое алгоритм по тексту урока?'}], reason='')
+            return Batch(questions=[candidate | {'sources': [{'fragment_id': candidate['sources'][0]['fragment_id'], 'quote': 'Этой цитаты нет в документе вообще нигде'}]}], reason='')
+        if schema is Verdict:
+            return Verdict(relevant=True, supported=True, clear=True, single_correct=True, is_duplicate=False, language_matches=True,
+                           level=1, difficulty_reason='Определение', reasons=[])
+        raise AssertionError(schema)
+    monkeypatch.setattr(LLM, 'json', fake)
+    client.post('/api/generate', json={'document_id': doc, 'count': 1, 'type': 'mcq', 'level': 1})
+    job = client.get('/api/jobs', params={'document_id': doc}).json()[0]
+    assert job['created'] == 1
+    q = client.get('/api/questions', params={'document_id': doc}).json()[0]
+    assert q['text'].startswith('Исправленный') and q['auto_fixed']['passed'] and q['verification'] == 'confirmed'
