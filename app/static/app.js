@@ -320,7 +320,7 @@ async function loadQuestions(){
   if (!S.doc) return;
   const qs = new URLSearchParams({document_id:S.doc});
   if ($('f-status').value) qs.set('status',$('f-status').value);
-  if ($('f-auto').value) qs.set('auto_status',$('f-auto').value);
+  if ($('f-auto').value) qs.set('verification',$('f-auto').value);
   if ($('f-level').value) qs.set('level',$('f-level').value);
   const ft = segVal('f-type'); if (ft && ft!=='mixed') qs.set('type',ft);
   const topic = S.detail && S.detail.topics.find(t => String(t.id)===$('f-topic').value); if (topic) qs.set('topic',topic.name);
@@ -332,7 +332,7 @@ async function loadQuestions(){
 function renderBankStats(all, st){
   const accepted = all.filter(q=>q.review_status==='accepted').length;
   const stat = (n,t) => h('div',{class:'stat'}, h('b',{text:n}), h('span',{text:t}));
-  $('bank-stats').replaceChildren(stat(all.length,'вопросов в банке'), stat(st.accepted_for_test ?? accepted,'принято в тест'), stat(st.auto_passed ?? '—','прошли AI-проверку'), stat(st.unchecked_level ?? 0,'без проверки уровня'));
+  $('bank-stats').replaceChildren(stat(all.length,'вопросов в банке'), stat(st.accepted_for_test ?? accepted,'принято в тест'), stat(all.filter(q=>q.verification==='confirmed').length,'подтверждены документом'), stat(all.filter(q=>q.verification==='rejected').length,'не подтверждены'));
   const counts = LEVELS.map(l => all.filter(q => q.checked_level===l.n).length);
   const max = Math.max(1, ...counts);
   $('coverage').replaceChildren(...LEVELS.map((l,i) => h('div',{class:'cov'},
@@ -349,11 +349,13 @@ function questionCard(q){
     h('span',{class:'chip',text: q.type==='mcq' ? 'Тестовый' : 'Открытый'}),
     q.topic ? h('span',{class:'chip',text:q.topic}) : null,
     h('span',{class:'chip '+(review==='accepted'?'gold':review==='rejected'?'bad':''), text: LBL[review]||review}),
-    h('span',{class:'chip '+(auto==='passed'?'ok':auto==='failed'?'bad':'warn'), text: LBL[auto]||auto}));
+    h('span',{class:'chip '+VERIFY[q.verification].cls, title:'Проверка по загруженному документу', text: VERIFY[q.verification].label}),
+    q.auto_fixed && q.auto_fixed.passed ? h('span',{class:'chip sky',title:'Исходные ошибки: '+(q.auto_fixed.reasons||[]).join(' · '),text:'Исправлен автоматически'}) : null);
   const notes = [];
-  if (q.possible_duplicate) notes.push(h('p',{class:'note',text:'Похож на «'+q.possible_duplicate+'». Сравните перед тем, как принять.'}));
-  if (!q.checked_level) notes.push(h('p',{class:'note',text:'Уровень сложности не проверен. Запустите повторную AI-проверку, иначе вопрос не попадёт в тест.'}));
-  else if (q.level_mismatch) notes.push(h('p',{class:'note',text:'Запрашивался уровень '+q.requested_level+', проверка определила '+q.checked_level+'.'}));
+  if (q.verification==='rejected') notes.push(h('p',{class:'note bad',text:'Документ не подтверждает этот вопрос, поэтому он не попадёт в тест. '+((q.verification_notes||[])[0]||'')}));
+  else if (q.verification==='review') (q.verification_notes||[]).forEach(t => notes.push(h('p',{class:'note',text:t})));
+  if (q.possible_duplicate && q.verification!=='review') notes.push(h('p',{class:'note',text:'Похож на «'+q.possible_duplicate+'». Сравните перед тем, как принять.'}));
+  if (!q.checked_level && q.verification!=='rejected') notes.push(h('p',{class:'note',text:'Уровень сложности не проверен. Запустите повторную AI-проверку, иначе вопрос не попадёт в тест.'}));
   const letters = 'ABCD';
   const opts = q.options && q.options.length ? h('ol',{class:'opts'}, ...q.options.map((o,i)=>h('li',{class:i===q.correct_index?'right':''}, h('span',{class:'k',text:letters[i]||i+1}), h('span',{text:o})))) : null;
   const reasons = (q.validation && q.validation.reasons) || [];
@@ -364,17 +366,55 @@ function questionCard(q){
         q.explanation ? h('div',null,h('dt',{text:'Объяснение'}),h('dd',{text:q.explanation})) : null,
         h('div',null,h('dt',{text:'Почему такой уровень'}),h('dd',{text:q.difficulty_reason||'Уровень ещё не проверен'}))),
       reasons.length ? h('div',null, h('dt',{text:'AI-проверка',style:'font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:4px'}), h('ul',{class:'checks'+(auto==='passed'?'':' warn')}, ...reasons.map(r=>h('li',{text:r})))) : null,
-      ...(q.sources||[]).map(s => h('blockquote',{class:'src'}, h('cite',{text:s.location||'Источник требует проверки'}), '«'+s.quote+'»'))));
+      ...(q.sources||[]).map(s => h('blockquote',{class:'src'}, h('cite',{text:(s.location||'Источник требует проверки') + (s.match && s.match!=='exact' ? ' · '+(MATCH[s.match]||'') : '')}), '«'+s.quote+'»'))));
   const canAccept = auto==='passed' && q.checked_level;
   const actions = h('div',{class:'actions'},
     review!=='accepted' ? btn('Принять','gold', async()=>{ await api('/api/questions/'+q.id+'/review',{method:'POST',body:{status:'accepted',revision:q.revision}}); toast('Вопрос принят в тест.'); await loadQuestions(); }, {disabled:!canAccept, title: canAccept ? null : 'Сначала вопрос должен пройти AI-проверку'}) :
       btn('Вернуть на проверку','', async()=>{ await api('/api/questions/'+q.id+'/review',{method:'POST',body:{status:'pending',revision:q.revision}}); toast('Вопрос возвращён на проверку.'); await loadQuestions(); }),
+    (q.sources||[]).length ? btn('Показать в документе','', async()=>openSource(q.id)) : null,
+    q.verification==='rejected' && !(q.verification_notes||[]).some(r=>/повтор|похож/i.test(r)) ? btn('Исправить автоматически','primary', async()=>{ toast('AI исправляет вопрос по документу и проверяет заново…'); const r = await api('/api/questions/'+q.id+'/repair',{method:'POST'}); toast(r.message); await loadQuestions(); }) : null,
     btn('Редактировать','', async()=>openEditor(q)),
     btn('Проверить ещё раз','ghost', async()=>{ toast('AI проверяет вопрос…'); const r = await api('/api/questions/'+q.id+'/recheck',{method:'POST'}); toast(r.message||'Проверка завершена'); await loadQuestions(); }),
     review!=='rejected' ? btn('Отклонить','ghost', async()=>{ await api('/api/questions/'+q.id+'/review',{method:'POST',body:{status:'rejected',revision:q.revision}}); toast('Вопрос отклонён.'); await loadQuestions(); }) : null,
     btn('Удалить','danger push', async()=>{ if(!await confirmAction('Удалить вопрос из банка? Сохранённые попытки останутся.')) return; await api('/api/questions/'+q.id,{method:'DELETE'}); toast('Вопрос удалён.'); await loadQuestions(); }));
   return h('article',{class:'q',style:'--qc:'+L.color}, head, h('h3',{text:q.text}), opts, ...notes, answer, actions);
 }
+
+/* ---------- source viewer ---------- */
+const VERIFY = {confirmed:{label:'Подтверждён',cls:'ok'}, review:{label:'Требует проверки',cls:'warn'}, rejected:{label:'Не подтверждён',cls:'bad'}};
+const MATCH = {exact:'дословное совпадение', normalized:'совпадение без учёта пунктуации', fuzzy:'почти дословно', parts:'по частям', partial:'совпадает часть цитаты'};
+function markText(text, range){
+  if (!range) return [text];
+  return [text.slice(0,range[0]), h('mark',{text:text.slice(range[0],range[1])}), text.slice(range[1])];
+}
+async function openSource(qid){
+  const d = await api('/api/questions/'+qid+'/source');
+  const dlg = $('source-dialog');
+  $('source-title').textContent = d.document.name;
+  $('source-sub').textContent = 'Вопрос: ' + d.text;
+  const blocks = d.sources.map((s,i) => {
+    if (s.missing) return h('p',{class:'note bad',text:'Фрагмент источника не найден в документе.'});
+    const page = s.page ? h('span',{class:'chip',text:'Страница '+s.page}) : h('span',{class:'chip',text:'Фрагмент текста'});
+    const verdict = h('span',{class:'chip '+(s.highlight && (!s.match || ['exact','normalized'].includes(s.match)) ? 'ok' : 'warn'), text: s.highlight ? (MATCH[s.match]||'найдено в документе') : 'цитата не найдена'});
+    const text = h('div',{class:'src-text'},
+      s.before ? h('span',{class:'ctx',text:'… '+s.before+' '}) : null,
+      ...markText(s.fragment_text, s.highlight),
+      s.after ? h('span',{class:'ctx',text:' '+s.after+' …'}) : null);
+    const img = d.pdf_pages && s.page ? h('img',{class:'src-page',alt:'Страница '+s.page+' с выделенной цитатой',loading:'lazy',
+      src:`/api/documents/${d.document.id}/pages/${s.page}.png?q=${encodeURIComponent(s.quote)}`}) : null;
+    return h('section',{class:'src-block'}, h('div',{class:'chips'}, h('b',{text:'Подтверждение '+(d.sources.length>1?(i+1):'')}), page, verdict),
+      img ? h('div',{class:'src-grid'}, img, text) : text);
+  });
+  $('source-body').replaceChildren(
+    h('div',{class:'chips',style:'margin-bottom:12px'}, h('span',{class:'chip '+VERIFY[d.verification].cls,text:VERIFY[d.verification].label}),
+      d.pdf_pages ? h('a',{class:'link-btn',href:'/api/documents/'+d.document.id+'/file',target:'_blank',rel:'noopener'},'Открыть исходный файл') : h('span',{class:'hint',text:'Исходный PDF не сохранён: показан текст документа. Загрузите файл ещё раз, чтобы видеть страницы.'})),
+    ...(d.verification_notes||[]).map(t=>h('p',{class:'note',text:t})),
+    ...blocks);
+  dlg.showModal();
+  const first = dlg.querySelector('mark'); if (first) first.scrollIntoView({block:'center'});
+}
+$('source-close').addEventListener('click', ()=>$('source-dialog').close());
+$('source-dialog').addEventListener('click', e=>{ if (e.target===$('source-dialog')) $('source-dialog').close(); });
 
 /* ---------- editor ---------- */
 function openEditor(q){

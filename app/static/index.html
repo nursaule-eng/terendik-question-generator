@@ -105,7 +105,7 @@
         <form class="panel" id="filter-form">
           <div class="grid g4">
             <label class="field">Решение преподавателя<select id="f-status"><option value="">Все</option><option value="pending">Ожидают проверки</option><option value="accepted">Приняты</option><option value="rejected">Отклонены</option></select></label>
-            <label class="field">AI-проверка<select id="f-auto"><option value="">Все</option><option value="passed">Пройдена</option><option value="failed">Не пройдена</option><option value="stale">Нужна повторная</option></select></label>
+            <label class="field">Проверка по документу<select id="f-auto"><option value="">Все</option><option value="confirmed">Подтверждён</option><option value="review">Требует проверки</option><option value="rejected">Не подтверждён</option></select></label>
             <label class="field">Тема<select id="f-topic" class="topic-select"></select></label>
             <label class="field">Уровень<select id="f-level"><option value="">Все уровни</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
           </div>
@@ -178,6 +178,13 @@
   </main>
 </div>
 
+<dialog id="source-dialog" aria-labelledby="source-title">
+  <div class="src-viewer">
+    <div class="src-head"><div><h2 id="source-title">Источник вопроса</h2><p class="hint" id="source-sub"></p></div>
+      <button class="btn ghost" type="button" id="source-close">Закрыть</button></div>
+    <div id="source-body"></div>
+  </div>
+</dialog>
 <div id="toasts" role="status" aria-live="polite"></div>
 
 <dialog id="edit-dialog">
